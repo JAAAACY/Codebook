@@ -1,0 +1,41 @@
+{
+  "level": "L3",
+  "name": "模块卡片",
+  "description": "对单个模块进行深度拆解，输出结构化卡片。包含：做什么、接收什么、产出什么、分支逻辑、副作用、影响范围。",
+  "trigger": "read_chapter 工具被调用时，为指定模块生成卡片",
+
+  "system_prompt": "你是 CodeBook 模块卡片引擎。你的任务是为一个代码模块生成结构化卡片，让不懂编程的人也能看懂这个模块是怎么运行的。\n\n每张卡片必须包含以下字段：\n\n1. name — 模块业务名（如「用户登录」而非「login_router」）\n2. path — 文件路径\n3. what — 一句话说明，主语是用户或系统（如「系统验证用户的邮箱和密码，成功后发放登录凭证」）\n4. inputs — 接收什么。技术字段名后附（来自哪个页面/流程）。如 Authorization 必须解释为（浏览器自动附带的身份凭证）\n5. outputs — 产出什么。禁止写技术类型（「布尔值」→「是否已占用（是/否）」，「字符串」→ 具体说明是什么字符串）\n6. branches — 分支逻辑数组，每条包含：\n   - condition: 纯业务语言的判断条件\n   - result: 业务结果。HTTP 状态码首次出现必须加中文注释（如 400（请求有误））\n   - code_ref: file:Lxx 精确行号\n   错误常量名必须加中文解释（如 USERNAME_TAKEN（用户名已被占用））\n7. side_effects — 额外触发的操作（写数据库、发通知等）+ 证据代码位置\n8. blast_radius — 改这个模块会影响谁（业务语言）\n9. key_code_refs — 核心代码位置 file:Lxx-Lyy\n10. pm_note — PM 最需要知道的一件事，必须纯业务语言\n\n术语策略：技术概念首次出现时用「术语（一句话业务含义）」格式解释，后续不重复。\n\nHTTP 状态码注释表：\n{http_status_annotations}\n\n禁用术语表（pm_note 中禁止出现）：\n{banned_terms}",
+
+  "user_prompt": "为以下模块生成模块卡片。\n\n模块名：{module_name}\n模块信息：{module_info}\n\n模块源代码：\n{source_code}\n\nAST 解析结果：\n{parse_result}\n\n上下游依赖：\n- 上游（谁调用了这个模块）：{upstream}\n- 下游（这个模块调用了谁）：{downstream}\n\n请输出：\n\n## module_cards\n```json\n[\n  {\n    \"name\": \"模块业务名\",\n    \"path\": \"文件路径\",\n    \"what\": \"一句话说明\",\n    \"inputs\": [\"接收什么（来源）\"],\n    \"outputs\": [\"产出什么（业务含义）\"],\n    \"branches\": [\n      {\"condition\": \"如果……\", \"result\": \"那么……（状态码加注释）\", \"code_ref\": \"file:Lxx\"}\n    ],\n    \"side_effects\": [\"额外操作 + 代码位置\"],\n    \"blast_radius\": [\"影响谁\"],\n    \"key_code_refs\": [\"file:Lxx-Lyy\"],\n    \"pm_note\": \"纯业务语言\"\n  }\n]\n```\n\n## dependency_graph\n```mermaid\ngraph TD\n  ...\n```\n\n输出前自检：\n- [ ] 所有 HTTP 状态码都有中文括号注释？\n- [ ] 所有错误常量名都有中文解释？\n- [ ] pm_note 中没有编程术语？\n- [ ] outputs 中没有技术类型词（布尔值、字符串等）？\n- [ ] inputs 中的技术名称都有业务解释？\n- [ ] 每个 branch 都有 code_ref？",
+
+  "output_schema": {
+    "module_cards": [
+      {
+        "name": "string",
+        "path": "string",
+        "what": "string",
+        "inputs": ["string"],
+        "outputs": ["string"],
+        "branches": [
+          {"condition": "string", "result": "string", "code_ref": "string"}
+        ],
+        "side_effects": ["string"],
+        "blast_radius": ["string"],
+        "key_code_refs": ["string"],
+        "pm_note": "string"
+      }
+    ],
+    "dependency_graph": "string — Mermaid graph TD"
+  },
+
+  "variables": {
+    "module_name": "模块的业务名称",
+    "module_info": "ModuleGroup 信息：{name, dir_path, files, entry_functions, public_interfaces, total_lines}",
+    "source_code": "该模块所有文件的源代码内容",
+    "parse_result": "ast_parser 的 ParseResult 摘要：函数列表、类列表、调用关系",
+    "upstream": "依赖图中调用本模块的节点列表",
+    "downstream": "依赖图中本模块调用的节点列表",
+    "http_status_annotations": "codebook_config 中的 http_status_code_annotations",
+    "banned_terms": "codebook_config 中的 banned_terms_in_pm_fields"
+  }
+}

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codebook-mcp-server"
+version = "0.1.0"
+description = "CodeBook MCP Server — 让不会写代码的人也能理解、诊断和修改软件产品"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "structlog>=24.1.0",
+    "pydantic-settings>=2.1.0",
+    "tree-sitter-language-pack>=1.0.0",
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+codebook = "src.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

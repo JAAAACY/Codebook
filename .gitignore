@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Caches
+.pytest_cache/
+.codebook_cache/
+pytest-cache-files-*/
+
+# OS
+.DS_Store
+~$*
+
+# Temp files
+.tmp-*
+
+# IDE
+.vscode/
+.idea/
+
+# Cloned repos (large, should not be committed)
+repos/
