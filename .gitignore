@@ -25,3 +25,5 @@ pytest-cache-files-*/
 
 # Cloned repos (large, should not be committed)
 repos/
+.~lock.*
+run_a2_*.py
