@@ -1,0 +1,306 @@
+{
+  "product": {
+    "name": "CodeBook",
+    "version": "0.3",
+    "positioning": "用户不同角色、不同行业背景的代码理解引擎",
+    "target_users": "开发者、产品经理、行业专家（金融/医疗/电商等）、QA/运维",
+    "core_value": "同一份代码，不同角色看到不同的翻译视角。PM 看业务影响，开发者看代码细节，行业专家看规则符合性。"
+  },
+
+  "role_system_v0_3": {
+    "description": "三核心视图 + 动态领域适配的新角色系统",
+    "views": [
+      {
+        "name": "dev",
+        "display_name": "开发者视角",
+        "target_users": ["全栈开发者", "架构师", "技术 TL"],
+        "core_concerns": ["代码逻辑", "性能瓶颈", "边界条件", "圈复杂度"],
+        "key_differences": {
+          "scan_repo": {
+            "emphasis": "技术栈细节、高频函数、关键路径",
+            "added_fields": ["critical_functions", "complexity_metrics"],
+            "mermaid_detail": "函数级"
+          },
+          "read_chapter": {
+            "emphasis": "完整函数签名、参数类型、调用链上游",
+            "added_fields": ["critical_markers", "full_signatures", "edge_cases"]
+          },
+          "diagnose": {
+            "emphasis": "精确定位、完整代码片段、循环依赖",
+            "added_fields": ["code_snippet"]
+          },
+          "ask_about": {
+            "emphasis": "源代码优先于文档、无术语限制",
+            "context_priority": ["source_code", "upstream_functions", "technical_detail"]
+          },
+          "codegen": {
+            "emphasis": "精确行号、边界条件、性能影响",
+            "added_fields": ["edge_cases", "performance_implications"]
+          }
+        },
+        "banned_terms": []
+      },
+      {
+        "name": "pm",
+        "display_name": "产品经理视角",
+        "target_users": ["产品经理", "项目经理", "管理层", "非技术决策者"],
+        "core_concerns": ["功能完整性", "变更影响", "工作量估算", "风险识别"],
+        "key_differences": {
+          "scan_repo": {
+            "emphasis": "功能完整性、模块职责、风险区域",
+            "added_fields": ["completion_hint", "risk_areas"],
+            "mermaid_detail": "模块级简化"
+          },
+          "read_chapter": {
+            "emphasis": "功能描述（What）而非实现（How）、暴露接口、完成度",
+            "added_fields": ["interface_list", "completion_percentage"]
+          },
+          "diagnose": {
+            "emphasis": "影响范围、blast_radius、用户体验",
+            "matched_nodes_sort": "by_impact_range"
+          },
+          "ask_about": {
+            "emphasis": "模块概览、工作量、依赖关系",
+            "context_priority": ["L2_overview", "entry_functions", "estimates"]
+          },
+          "codegen": {
+            "emphasis": "业务语言、用户影响、变更风险",
+            "change_summary_style": "business_language"
+          }
+        },
+        "banned_terms": [
+          "幂等 / idempotent",
+          "slug",
+          "冷启动 / cold start",
+          "连接池 / connection pool",
+          "openapi / swagger",
+          "env_file / .env",
+          "middleware / 中间件",
+          "布尔值 / boolean",
+          "回调 / callback",
+          "异步 / async",
+          "序列化 / serialize",
+          "AST",
+          "NetworkX",
+          "Tree-sitter"
+        ]
+      },
+      {
+        "name": "domain_expert",
+        "display_name": "行业专家视角",
+        "target_users": ["金融合规官", "医疗数据官", "电商风控专家", "法律顾问"],
+        "core_concerns": ["业务规则验证", "合规检查", "术语准确性", "风险识别"],
+        "requires_project_domain": true,
+        "key_differences": {
+          "scan_repo": {
+            "emphasis": "业务规则检测、敏感操作、合规覆盖",
+            "added_fields": ["domain_analysis", "compliance_scope"],
+            "mermaid_detail": "按业务流程着色"
+          },
+          "read_chapter": {
+            "emphasis": "业务规则清单、合规检查点、参数业务映射",
+            "added_fields": ["domain_rules", "compliance_points"]
+          },
+          "diagnose": {
+            "emphasis": "合规风险、敏感操作、规则符合性",
+            "added_fields": ["compliance_impact"],
+            "matched_nodes_sort": "by_compliance_risk"
+          },
+          "ask_about": {
+            "emphasis": "术语表注入、敏感操作代码、审计日志",
+            "context_priority": ["terminology_table", "sensitive_operations", "audit_logs"]
+          },
+          "codegen": {
+            "emphasis": "行业术语、合规清单、数据安全影响",
+            "added_fields": ["compliance_checklist"]
+          }
+        },
+        "terminology_injection": "通过 project_domain 参数自动加载行业术语包",
+        "supported_domains": ["fintech", "healthcare", "ecommerce", "saas", "general"]
+      }
+    ]
+  },
+
+  "backward_compatibility": {
+    "description": "旧角色名自动映射到新视图系统",
+    "mappings": {
+      "ceo": "pm",
+      "pm": "pm",
+      "investor": "pm",
+      "qa": "dev",
+      "dev": "dev",
+      "domain_expert": "domain_expert"
+    },
+    "deprecation_notice": "角色 'ceo', 'investor' 已弃用。请改用 'pm' 或新增的 'domain_expert'。"
+  },
+
+  "project_domain_inference": {
+    "description": "当未显式指定 project_domain 时的推断策略（优先级从高到低）",
+    "priority_layers": [
+      {
+        "layer": 1,
+        "name": "显式参数",
+        "description": "scan_repo(project_domain='fintech') 中明确指定的值"
+      },
+      {
+        "layer": 2,
+        "name": "自动推断",
+        "description": "从 README.md 关键词和依赖包名推断",
+        "inference_rules": {
+          "fintech": {
+            "readme_keywords": ["金融", "支付", "交易", "钱包", "银行", "转账"],
+            "dependency_markers": ["stripe", "braintree", "square", "wise", "alipay", "paypal"]
+          },
+          "healthcare": {
+            "readme_keywords": ["医疗", "诊断", "患者", "处方", "病历"],
+            "dependency_markers": ["fhir", "hl7", "dicom", "hl7apy"]
+          },
+          "ecommerce": {
+            "readme_keywords": ["电商", "购物车", "订单", "物流", "商品"],
+            "dependency_markers": ["shopify", "woocommerce", "bigcommerce", "prestashop"]
+          },
+          "saas": {
+            "readme_keywords": ["软件即服务", "租户", "订阅", "多租户"],
+            "dependency_markers": ["stripe-billing", "recurly", "chargebee"]
+          }
+        }
+      },
+      {
+        "layer": 3,
+        "name": "术语库记忆",
+        "description": "从 ~/.codebook/memory/{repo_hash}/meta.json 读取已记录的 project_domain"
+      }
+    ],
+    "default": null
+  },
+
+  "terminology_management": {
+    "description": "术语飞轮系统与角色的集成",
+    "resolution_priority": [
+      "用户纠正（confidence=1.0）",
+      "项目级术语库",
+      "项目领域术语包（通过 project_domain 加载）",
+      "通用术语包",
+      "全局默认词表"
+    ],
+    "integration_points": {
+      "scan_repo": "项目概览中的术语翻译",
+      "read_chapter": "PM 视角生成无技术术语的卡片",
+      "diagnose": "guidance 中注入角色+领域相关术语列表",
+      "ask_about": "system prompt 中注入禁用术语 + 推荐术语",
+      "codegen": "生成业务语言的变更摘要"
+    }
+  },
+
+  "output_formats": {
+    "blueprint": {
+      "description": "项目全景图，让不同角色看到各自关心的内容",
+      "dev_additions": {
+        "critical_functions": "列出高频调用或关键路径函数及其复杂度",
+        "complexity_metrics": "圈复杂度、参数数量等指标"
+      },
+      "pm_additions": {
+        "completion_hint": "如「核心功能完成，待优化」",
+        "risk_areas": "列出最容易出问题的地方"
+      },
+      "domain_expert_additions": {
+        "domain_analysis": "检测项目中涉及的业务规则（如检测 payment 相关代码）",
+        "compliance_scope": "已有合规覆盖的操作清单"
+      }
+    },
+
+    "module_card": {
+      "description": "结构化卡片，三种视角输出差异点",
+      "dev_emphasis": ["完整函数签名", "参数类型", "调用链", "边界条件代码片段"],
+      "pm_emphasis": ["功能描述", "暴露接口", "完成度", "风险标记"],
+      "domain_expert_emphasis": ["业务规则清单", "合规检查点", "参数业务映射", "敏感操作标记"]
+    },
+
+    "diagnose_result": {
+      "description": "诊断结果的三视角输出",
+      "dev_output": {
+        "exact_locations": "全部匹配，含完整代码片段",
+        "call_chain": "完整详细的调用链",
+        "guidance": "强调代码细节和实现细节"
+      },
+      "pm_output": {
+        "matched_modules": "按影响范围排序",
+        "blast_radius": "重点强调，明确说明对用户的影响",
+        "guidance": "强调这个问题如何影响用户体验"
+      },
+      "domain_expert_output": {
+        "matched_nodes": "按合规风险排序",
+        "compliance_impact": "新增字段：列出相关的合规检查项",
+        "guidance": "强调规则符合性和风险"
+      }
+    },
+
+    "codegen_result": {
+      "description": "代码生成结果的三视角输出",
+      "dev_output": {
+        "unified_diff": "行号精确到原始",
+        "edge_cases": "新增段落：修改涉及的边界情况"
+      },
+      "pm_output": {
+        "change_summary": "业务语言描述（「新增支付重试逻辑」）",
+        "blast_radius": "明确说明对用户的影响"
+      },
+      "domain_expert_output": {
+        "change_summary": "行业术语描述",
+        "compliance_checklist": "新增段落：修改后需要检查的合规项"
+      }
+    }
+  },
+
+  "guidance_templates": {
+    "dev": "你是 CodeBook 的 AI 助手，正在帮助开发者理解代码。\n\n提供精确的代码定位、调用栈分析和实现细节。\n\n关键信息：函数签名、参数类型、返回值、异常处理、循环依赖、性能瓶颈、内存安全。\n\n可以使用所有技术术语（AST、序列化、中间件、幂等性、连接池等）。\n\n优先包含源代码而非文档。支持追问函数签名、异常处理、边界条件等技术细节。",
+
+    "pm": "你是 CodeBook 的 AI 助手，正在帮助产品经理理解代码变更的业务影响。\n\n使用纯业务语言描述问题，避免使用技术术语。\n\n关键信息：功能完整性、用户体验影响、工作量估算、依赖关系、风险识别。\n\n禁止使用以下术语：幂等、slug、冷启动、连接池、中间件、序列化、回调、异步、AST、NetworkX、Tree-sitter。必须将这些概念转化为业务语言。\n\n优先包含模块概览而非源代码。支持追问完成度、工作量估算等管理类问题。",
+
+    "domain_expert": "你是 CodeBook 的 AI 助手，正在帮助行业专家审查代码。\n\n你的任务是用该领域的专业术语翻译代码逻辑，让行业专家能够验证实现是否符合行业标准和最佳实践。\n\n关键信息：业务规则验证、合规检查、风险识别、审计记录。\n\n重点识别涉及数据安全、合规要求、业务规则的代码部分。",
+
+    "domain_expert_fintech": "你是 CodeBook 的 AI 助手，正在帮助金融合规官审查代码。\n\n项目领域：金融科技。应当使用以下术语及其业务含义：\n- KYC = 客户身份验证\n- AML = 反洗钱检查\n- settlement = 资金结算\n- transaction = 交易\n- 幂等性 = 重复操作不产生副作用（关键金融概念）\n- PCI DSS = 支付卡行业数据安全标准\n- 审计日志 = 记录所有金融操作的历史\n\n关键检查项：交易金额限制、审计日志、加密存储、访问控制、异常交易检测。\n\n重点识别涉及支付、结算、身份验证的代码，以及是否存在合规缺陷。",
+
+    "domain_expert_healthcare": "你是 CodeBook 的 AI 助手，正在帮助医疗数据官审查代码。\n\n项目领域：医疗健康。应当使用以下术语及其业务含义：\n- FHIR = 快速医疗互操作性资源（医疗数据标准）\n- HL7 = 医疗信息交换标准\n- PHI = 受保护的健康信息（需加密存储）\n- 患者隐私 = 医疗数据的绝对保密性需求\n- 诊断 = 医学判断，需要医生审批\n- 处方 = 医学处方数据，属于受管制信息\n\n关键检查项：患者数据加密、访问日志、诊断链的可审计性、处方的合法性检查。\n\n重点识别涉及患者数据、诊断、处方的代码，以及是否满足医疗隐私保护法规（如 HIPAA）。",
+
+    "domain_expert_ecommerce": "你是 CodeBook 的 AI 助手，正在帮助电商风控专家审查代码。\n\n项目领域：电子商务。应当使用以下术语及其业务含义：\n- 订单 = 用户购买行为的记录\n- 支付 = 交易金额的验证和转移\n- 物流 = 商品配送的跟踪管理\n- 库存 = 可售商品的数量管理\n- 退款 = 交易取消和金额返还\n- 风险控制 = 检测欺诈交易和异常订单\n- 发货 = 商品从仓库出发的过程\n\n关键检查项：订单的一致性、支付的原子性、库存扣减时机、退款流程的完整性、风险检测的覆盖度。\n\n重点识别涉及支付、订单、物流、库存的代码，以及是否存在库存超卖、重复扣款、风险漏检等问题。"
+  },
+
+  "term_glossary_strategy": "不消灭术语，而是让术语成为共同语言。规则：技术概念首次出现时，用格式「术语（一句话业务含义）」解释。后续出现不再重复解释。例：**JWT**（用户登录后拿到的临时通行证，7天过期）。",
+
+  "banned_terms_in_pm_fields": {
+    "_description": "以下术语禁止在 PM 视角的 pm_note、entry_points、diagnosis 等字段中直接出现。必须替换为业务语言。在 dev 和 domain_expert 视角中不受限。",
+    "terms": {
+      "幂等 / idempotent": "描述重复操作的具体后果",
+      "slug": "URL 中的文章标识",
+      "冷启动 / cold start": "描述具体缺失场景（如「新用户首页为空」）",
+      "连接池 / connection pool": "同时处理请求的上限",
+      "openapi / swagger": "API 调试页面",
+      "env_file / .env": "配置文件",
+      "middleware / 中间件": "请求处理的中间环节",
+      "布尔值 / boolean": "是/否",
+      "回调 / callback": "完成后自动触发的操作",
+      "异步 / async": "不阻塞其他操作地执行",
+      "序列化 / serialize": "把数据转换成可传输的格式",
+      "AST / 抽象语法树": "代码的结构化表示",
+      "NetworkX": "图论库",
+      "Tree-sitter": "代码解析库"
+    }
+  },
+
+  "http_status_code_annotations": {
+    "_description": "所有面向 PM/domain_expert 的输出中，HTTP 状态码首次出现时必须附加中文括号注释。Dev 视角可选。",
+    "codes": {
+      "200": "成功",
+      "201": "创建成功",
+      "204": "操作成功，无返回内容",
+      "400": "请求有误",
+      "401": "未登录",
+      "403": "没有权限",
+      "404": "找不到",
+      "409": "数据冲突",
+      "422": "数据格式不对",
+      "500": "系统内部错误"
+    }
+  }
+}

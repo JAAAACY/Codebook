@@ -14,7 +14,7 @@ from typing import Any
 
 import structlog
 
-from src.config import settings
+
 from src.tools.diff_validator import (
     DiffValidator,
     ValidationResult,
@@ -180,29 +180,6 @@ CODEGEN_SYSTEM_PROMPT = textwrap.dedent("""\
 关键：上下文行开头必须有一个空格字符。删除行以 - 开头，新增行以 + 开头。\
 行号必须与当前代码中的实际行号完全一致。
 """)
-
-
-# ───────────────────────────────────────────
-# LLM 调用器
-# ───────────────────────────────────────────
-
-class LLMCaller:
-    """兼容层：保留类接口供测试使用，但实际运行时不再调用外部 LLM。
-
-    MCP 架构下，codegen 不再自行调用 Anthropic API，
-    而是将组装好的上下文返回给 MCP 宿主（Claude Desktop），由宿主 LLM 生成代码。
-    """
-
-    def __init__(self, model: str | None = None, max_tokens: int | None = None):
-        self.model = model or settings.ai_model
-        self.max_tokens = max_tokens or settings.ai_max_tokens
-
-    async def call(self, messages: list[dict[str, str]]) -> str:
-        """兼容接口 — MCP 模式下不再被主流程调用。"""
-        raise NotImplementedError(
-            "MCP 架构下不再需要内部 LLM 调用。"
-            "codegen 现在返回上下文和 prompt，由 MCP 宿主生成代码。"
-        )
 
 
 # ───────────────────────────────────────────
@@ -382,11 +359,9 @@ class CodegenEngine:
     def __init__(
         self,
         repo_path: str,
-        llm_caller: LLMCaller | None = None,
         max_retries: int = 1,
     ):
         self.repo_path = Path(repo_path)
-        self.llm = llm_caller or LLMCaller()
         self.parser = CodegenOutputParser()
         self.validator = DiffValidator(repo_path)
         self.max_retries = max_retries

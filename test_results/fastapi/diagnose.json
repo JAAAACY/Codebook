@@ -1,0 +1,22 @@
+[
+  {
+    "scenario": "cross_file_chain",
+    "query": "authentication error handling",
+    "status": "ok",
+    "time_seconds": 0.004129171371459961,
+    "keywords_count": 3,
+    "matched_nodes_count": 5,
+    "exact_locations_count": 8,
+    "has_call_chain": true
+  },
+  {
+    "scenario": "business_logic",
+    "query": "how data flows through modules",
+    "status": "ok",
+    "time_seconds": 0.006072282791137695,
+    "keywords_count": 3,
+    "matched_nodes_count": 5,
+    "exact_locations_count": 14,
+    "has_call_chain": true
+  }
+]

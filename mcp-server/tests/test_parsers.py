@@ -189,6 +189,285 @@ result = greet("world")
         callee_names = [c.callee_name for c in result.calls]
         assert "greet" in callee_names
 
+    async def test_class_stack_pop_on_exit(self):
+        """class_stack 必须在离开 class 作用域后正确弹出。
+
+        回归测试：class 之后的模块级函数不应被标记为方法。
+        包含多个 class + 模块级函数的组合来充分验证。
+        """
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write('''
+class Alpha:
+    def method_a(self):
+        pass
+
+def free_func_1():
+    """I am free."""
+    pass
+
+class Beta:
+    def method_b(self):
+        pass
+
+def free_func_2():
+    pass
+''')
+            f.flush()
+            file_info = FileInfo(
+                path="test_stack.py",
+                abs_path=f.name,
+                language="python",
+                size_bytes=os.path.getsize(f.name),
+                line_count=16,
+            )
+            result = await parse_file(file_info)
+
+        os.unlink(f.name)
+
+        # method_a 是 Alpha 的方法
+        method_a = [f for f in result.functions if f.name == "method_a"][0]
+        assert method_a.is_method is True
+        assert method_a.parent_class == "Alpha"
+
+        # free_func_1 是模块级函数，不是方法
+        free1 = [f for f in result.functions if f.name == "free_func_1"][0]
+        assert free1.is_method is False, f"free_func_1 should NOT be a method, got parent_class={free1.parent_class}"
+        assert free1.parent_class is None
+        assert free1.docstring == "I am free."
+
+        # method_b 是 Beta 的方法（不是 Alpha 的）
+        method_b = [f for f in result.functions if f.name == "method_b"][0]
+        assert method_b.is_method is True
+        assert method_b.parent_class == "Beta"
+
+        # free_func_2 是模块级函数
+        free2 = [f for f in result.functions if f.name == "free_func_2"][0]
+        assert free2.is_method is False, f"free_func_2 should NOT be a method, got parent_class={free2.parent_class}"
+        assert free2.parent_class is None
+
+    async def test_parse_swift_file(self):
+        """解析 Swift 文件：struct, class, enum, protocol, 函数, import, 调用关系。"""
+        with tempfile.NamedTemporaryFile(suffix=".swift", mode="w", delete=False) as f:
+            f.write('''
+import Foundation
+import SwiftUI
+
+struct ChatService {
+    private let endpoint = URL(string: "https://api.example.com")!
+
+    func send(message: String, history: [ChatMessage]) async -> ChatResponse {
+        var request = URLRequest(url: endpoint)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return try JSONDecoder().decode(ChatResponse.self, from: data)
+    }
+
+    private func buildHistory(from messages: [ChatMessage]) -> [[String: String]] {
+        return messages.compactMap { $0 }
+    }
+}
+
+class ViewModel: ObservableObject {
+    @Published var items: [Item] = []
+
+    func loadItems() {
+        let service = ChatService()
+        service.send(message: "hello", history: [])
+    }
+}
+
+enum AppError: Error {
+    case networkError
+    case parseError(String)
+}
+
+protocol DataProvider {
+    func fetchData() async throws -> Data
+}
+''')
+            f.flush()
+            file_info = FileInfo(
+                path="test/ChatService.swift",
+                abs_path=f.name,
+                language="swift",
+                size_bytes=os.path.getsize(f.name),
+                line_count=37,
+            )
+            result = await parse_file(file_info)
+
+        os.unlink(f.name)
+
+        assert isinstance(result, ParseResult)
+        assert result.language == "swift"
+        assert result.parse_errors == []
+
+        # Classes: struct ChatService, class ViewModel, enum AppError, protocol DataProvider
+        class_names = [c.name for c in result.classes]
+        assert "ChatService" in class_names
+        assert "ViewModel" in class_names
+        assert "AppError" in class_names
+        assert "DataProvider" in class_names
+
+        # Inheritance
+        vm = [c for c in result.classes if c.name == "ViewModel"][0]
+        assert vm.parent_class is not None
+        assert "ObservableObject" in vm.parent_class
+
+        err = [c for c in result.classes if c.name == "AppError"][0]
+        assert err.parent_class is not None
+        assert "Error" in err.parent_class
+
+        # Methods on classes
+        cs = [c for c in result.classes if c.name == "ChatService"][0]
+        assert "send" in cs.methods
+        assert "buildHistory" in cs.methods
+
+        dp = [c for c in result.classes if c.name == "DataProvider"][0]
+        assert "fetchData" in dp.methods
+
+        # Functions
+        func_names = [fn.name for fn in result.functions]
+        assert "send" in func_names
+        assert "buildHistory" in func_names
+        assert "loadItems" in func_names
+        assert "fetchData" in func_names
+
+        # Function params
+        send_func = [fn for fn in result.functions if fn.name == "send"][0]
+        assert "message" in send_func.params
+        assert "history" in send_func.params
+
+        # is_method flag
+        assert send_func.is_method is True
+        assert send_func.parent_class == "ChatService"
+
+        load_func = [fn for fn in result.functions if fn.name == "loadItems"][0]
+        assert load_func.is_method is True
+        assert load_func.parent_class == "ViewModel"
+
+        # Imports
+        import_modules = [i.module for i in result.imports]
+        assert "Foundation" in import_modules
+        assert "SwiftUI" in import_modules
+
+        # Calls
+        callee_names = [c.callee_name for c in result.calls]
+        assert "send" in callee_names  # service.send(...)
+        assert "ChatService" in callee_names  # ChatService() init
+        assert "decode" in callee_names  # JSONDecoder().decode(...)
+
+        # Call origin tracking
+        send_calls = [c for c in result.calls if c.callee_name == "send"]
+        assert any(c.caller_func == "loadItems" for c in send_calls)
+
+    async def test_swift_class_stack_pop_on_exit(self):
+        """Swift: struct/enum 后面的全局函数不应被标记为方法。
+
+        回归测试 C1: Swift 的 struct_declaration 不在 class_types 中，
+        但 grandparent push 路径（第533行）会向 class_stack push，
+        而 on_leave 只 pop class_types，导致 struct 内的 push 永远不 pop。
+        """
+        with tempfile.NamedTemporaryFile(suffix=".swift", mode="w", delete=False) as f:
+            f.write('''
+import Foundation
+
+struct Service {
+    func doWork() {
+        print("working")
+    }
+}
+
+func freeSwiftFunc() {
+    print("I am free")
+}
+
+struct AnotherService {
+    func process() {
+        print("processing")
+    }
+}
+
+func anotherFreeFunc() {
+    let s = Service()
+    s.doWork()
+}
+''')
+            f.flush()
+            file_info = FileInfo(
+                path="test_swift_stack.swift",
+                abs_path=f.name,
+                language="swift",
+                size_bytes=os.path.getsize(f.name),
+                line_count=24,
+            )
+            result = await parse_file(file_info)
+
+        os.unlink(f.name)
+
+        # doWork 是 Service 的方法
+        do_work = [fn for fn in result.functions if fn.name == "doWork"][0]
+        assert do_work.is_method is True
+        assert do_work.parent_class == "Service"
+
+        # freeSwiftFunc 是全局函数，不是方法
+        free1 = [fn for fn in result.functions if fn.name == "freeSwiftFunc"][0]
+        assert free1.is_method is False, f"freeSwiftFunc should NOT be a method, got parent_class={free1.parent_class}"
+        assert free1.parent_class is None
+
+        # process 是 AnotherService 的方法
+        process = [fn for fn in result.functions if fn.name == "process"][0]
+        assert process.is_method is True
+        assert process.parent_class == "AnotherService"
+
+        # anotherFreeFunc 是全局函数
+        free2 = [fn for fn in result.functions if fn.name == "anotherFreeFunc"][0]
+        assert free2.is_method is False, f"anotherFreeFunc should NOT be a method, got parent_class={free2.parent_class}"
+        assert free2.parent_class is None
+
+    def test_lang_config_matches_supported_languages(self):
+        """LANG_CONFIG 的 key 必须与 config.py 的 supported_languages 完全一致。
+
+        回归测试 C3: 防止语言列表不同步导致文件被静默跳过。
+        """
+        from src.parsers.ast_parser import LANG_CONFIG
+        from src.config import settings
+
+        lang_config_keys = set(LANG_CONFIG.keys())
+        supported = set(settings.supported_languages)
+
+        # 在 supported 但不在 LANG_CONFIG = 文件会被静默跳过
+        missing_config = supported - lang_config_keys
+        assert missing_config == set(), (
+            f"supported_languages 中有但 LANG_CONFIG 缺失: {missing_config}. "
+            f"这些语言的文件会被静默跳过！"
+        )
+
+        # 在 LANG_CONFIG 但不在 supported = 不会被扫描到
+        orphaned = lang_config_keys - supported
+        assert orphaned == set(), (
+            f"LANG_CONFIG 中有但 supported_languages 缺失: {orphaned}. "
+            f"这些语言的配置是死代码！"
+        )
+
+    def test_extension_to_language_maps_to_lang_config(self):
+        """EXTENSION_TO_LANGUAGE 的每个值必须在 LANG_CONFIG 或 supported_languages 之外被有意排除。
+
+        防止 repo_cloner.py 与 ast_parser.py 不同步导致文件被静默跳过。
+        """
+        from src.parsers.repo_cloner import EXTENSION_TO_LANGUAGE
+        from src.parsers.ast_parser import LANG_CONFIG
+
+        ext_langs = set(EXTENSION_TO_LANGUAGE.values())
+        lang_config_keys = set(LANG_CONFIG.keys())
+
+        # 这些语言在 EXTENSION_TO_LANGUAGE 中但还没有 LANG_CONFIG，是已知的 TODO
+        known_unsupported = {"ruby", "php", "kotlin"}
+
+        unexpected_orphans = ext_langs - lang_config_keys - known_unsupported
+        assert unexpected_orphans == set(), (
+            f"EXTENSION_TO_LANGUAGE 中有但 LANG_CONFIG 缺失且不在已知豁免列表中: {unexpected_orphans}. "
+            f"这些语言的文件会被扫描但无法解析！"
+        )
+
     async def test_parse_config_file_skipped(self):
         """配置文件跳过解析。"""
         file_info = FileInfo(

@@ -1,5 +1,8 @@
 """module_grouper — 按目录结构和命名空间对文件分组为模块。"""
 
+import json
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -75,6 +78,58 @@ def _get_sub_dir(file_path: str) -> str | None:
     return None
 
 
+# ── Swift Package 检测 ──────────────────────────────────
+
+def _detect_swift_package_targets(repo_path: str) -> list[dict] | None:
+    """解析 Package.swift 提取 target 定义作为模块边界。
+
+    返回 [{"name": "MyLib", "path": "Sources/MyLib", "type": "regular|test"}]
+    如果没有 Package.swift 则返回 None。
+    """
+    pkg_path = os.path.join(repo_path, "Package.swift")
+    if not os.path.isfile(pkg_path):
+        return None
+
+    try:
+        with open(pkg_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError:
+        return None
+
+    targets = []
+
+    # 匹配 .target(name: "X", ...) 和 .testTarget(name: "X", ...)
+    # 也匹配 .executableTarget(name: "X", ...)
+    target_pattern = re.compile(
+        r'\.(target|testTarget|executableTarget)\s*\(\s*name\s*:\s*"([^"]+)"'
+        r'(?:.*?path\s*:\s*"([^"]+)")?',
+        re.DOTALL,
+    )
+
+    for match in target_pattern.finditer(content):
+        target_type = match.group(1)
+        name = match.group(2)
+        explicit_path = match.group(3)
+
+        # 推断路径：如果没有显式指定，按 Swift 约定推断
+        if explicit_path:
+            path = explicit_path
+        elif target_type == "testTarget":
+            path = f"Tests/{name}"
+        else:
+            path = f"Sources/{name}"
+
+        targets.append({
+            "name": name,
+            "path": path,
+            "type": "test" if target_type == "testTarget" else "regular",
+        })
+
+    if targets:
+        logger.info("swift_package.detected", targets=len(targets))
+    return targets if targets else None
+
+
 # ── 核心分组函数 ─────────────────────────────────────────
 
 
@@ -85,6 +140,7 @@ async def group_modules(
     """按目录结构 + 命名空间将文件分组为模块。
 
     规则：
+    0. 如果检测到 Package.swift，按 Swift Package target 划分模块
     1. 每个顶层目录 = 一个模块
     2. 如果顶层目录内有子目录，子目录 = 子模块
     3. 单个大文件（>500 LOC）可独立成模块
@@ -98,6 +154,11 @@ async def group_modules(
     Returns:
         ModuleGroup 列表。
     """
+    # ── 尝试 Swift Package 模块划分 ──
+    swift_targets = _detect_swift_package_targets(repo_path)
+    if swift_targets:
+        return _group_by_swift_package(parse_results, swift_targets)
+
     # 按目录归类文件
     dir_files: dict[str, list[ParseResult]] = {}
     test_files: list[ParseResult] = []
@@ -168,6 +229,57 @@ async def group_modules(
 
     logger.info(
         "module_grouper.done",
+        modules=len(modules),
+        total_files=sum(len(m.files) for m in modules),
+    )
+    return modules
+
+
+def _group_by_swift_package(
+    parse_results: list[ParseResult],
+    targets: list[dict],
+) -> list[ModuleGroup]:
+    """按 Swift Package target 定义进行模块分组。"""
+    modules: list[ModuleGroup] = []
+    assigned_files: set[str] = set()
+
+    for target in targets:
+        name = target["name"]
+        target_path = target["path"]
+        is_test = target["type"] == "test"
+
+        # 匹配属于这个 target 的文件
+        target_results = [
+            pr for pr in parse_results
+            if pr.file_path.startswith(target_path + "/") or pr.file_path.startswith(target_path + "\\")
+        ]
+
+        if target_results:
+            module = _build_module(name, target_results)
+            module.is_special = is_test
+            modules.append(module)
+            assigned_files.update(pr.file_path for pr in target_results)
+
+    # 未匹配到任何 target 的文件归入 "其他" 模块
+    unmatched = [pr for pr in parse_results if pr.file_path not in assigned_files]
+    if unmatched:
+        # 按目录结构归类未匹配文件
+        dir_files: dict[str, list[ParseResult]] = {}
+        for pr in unmatched:
+            top_dir = _get_top_dir(pr.file_path)
+            sub_dir = _get_sub_dir(pr.file_path)
+            if sub_dir and top_dir != "<root>":
+                key = f"{top_dir}/{sub_dir}"
+            else:
+                key = top_dir
+            dir_files.setdefault(key, []).append(pr)
+
+        for dir_path, results in sorted(dir_files.items()):
+            modules.append(_build_module(dir_path, results))
+
+    logger.info(
+        "module_grouper.swift_package.done",
+        targets=len(targets),
         modules=len(modules),
         total_files=sum(len(m.files) for m in modules),
     )

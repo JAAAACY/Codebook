@@ -1,0 +1,12 @@
+{
+  "project": "sentry-python",
+  "repo_url": "https://github.com/getsentry/sentry-python",
+  "clone_date": "2026-03-23",
+  "file_count": 534,
+  "code_lines": 149881,
+  "languages": {
+    "Python": 470,
+    "JSON": 1,
+    "Markdown": 35
+  }
+}

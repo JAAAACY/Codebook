@@ -1,0 +1,37 @@
+{
+  "性能": {
+    "scan_time_seconds": 3.37,
+    "step_times": {
+      "clone": 0.14,
+      "parse": 0.93,
+      "group": 0.01,
+      "graph": 1.93,
+      "summary": 0.33,
+      "enhance": 0.01
+    },
+    "memory_peak_mb": null,
+    "total_lines": 132124
+  },
+  "规模": {
+    "modules": 10,
+    "functions": 5582,
+    "classes": 488,
+    "imports": 4217,
+    "calls": 30190,
+    "languages": {
+      "python": 469
+    }
+  },
+  "质量": {
+    "mermaid_nodes": 13,
+    "mermaid_readable": "9/10: Clear and concise (13 edges)",
+    "health_distribution": {
+      "green": 6,
+      "yellow": 2,
+      "red": 2
+    },
+    "module_grouping_score": "9/10",
+    "error": null,
+    "edge_cases": null
+  }
+}

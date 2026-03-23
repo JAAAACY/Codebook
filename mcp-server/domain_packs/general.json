@@ -1,0 +1,52 @@
+{
+  "domain": "general",
+  "version": "1.0",
+  "display_name": "General Programming",
+  "description": "Common programming terms and HTTP annotations",
+  "terms": [
+    {
+      "source_term": "idempotent",
+      "target_phrase": "重复操作不会产生副作用"
+    },
+    {
+      "source_term": "cache invalidation",
+      "target_phrase": "缓存失效处理"
+    },
+    {
+      "source_term": "race condition",
+      "target_phrase": "并发竞态条件"
+    },
+    {
+      "source_term": "deadlock",
+      "target_phrase": "死锁"
+    },
+    {
+      "source_term": "memory leak",
+      "target_phrase": "内存泄漏"
+    },
+    {
+      "source_term": "callback",
+      "target_phrase": "回调函数"
+    },
+    {
+      "source_term": "middleware",
+      "target_phrase": "中间件"
+    },
+    {
+      "source_term": "pipeline",
+      "target_phrase": "处理流水线"
+    },
+    {
+      "source_term": "hook",
+      "target_phrase": "钩子函数"
+    },
+    {
+      "source_term": "200 OK",
+      "target_phrase": "请求成功"
+    },
+    {
+      "source_term": "400 Bad Request",
+      "target_phrase": "请求参数错误"
+    }
+  ]
+}

@@ -143,7 +143,7 @@ LANG_CONFIG = {
         "body_field": "body",
         "superclass_field": None,
     },
-    "c_sharp": {
+    "csharp": {
         "function_def": ["method_declaration", "constructor_declaration"],
         "class_def": ["class_declaration"],
         "import": ["using_directive"],
@@ -152,6 +152,16 @@ LANG_CONFIG = {
         "params_field": "parameters",
         "body_field": "body",
         "superclass_field": "base_list",
+    },
+    "swift": {
+        "function_def": ["function_declaration", "protocol_function_declaration"],
+        "class_def": ["class_declaration", "protocol_declaration"],
+        "import": ["import_declaration"],
+        "call": ["call_expression"],
+        "name_field": "name",
+        "params_field": None,  # Swift 参数不在 field 中，需要专用提取
+        "body_field": "body",
+        "superclass_field": None,  # Swift 继承通过 inheritance_specifier 子节点表示
     },
 }
 
@@ -175,11 +185,13 @@ def _find_children_by_type(node, type_name: str) -> list:
     return [c for c in node.children if c.type == type_name]
 
 
-def _walk_tree(node, callback, depth=0):
-    """遍历 tree-sitter 语法树。"""
+def _walk_tree(node, callback, depth=0, on_leave=None):
+    """遍历 tree-sitter 语法树（支持 enter/leave 回调）。"""
     callback(node, depth)
     for child in node.children:
-        _walk_tree(child, callback, depth + 1)
+        _walk_tree(child, callback, depth + 1, on_leave=on_leave)
+    if on_leave is not None:
+        on_leave(node, depth)
 
 
 def _find_enclosing_function(node, lang_config: dict) -> str:
@@ -225,16 +237,30 @@ def _extract_python_docstring(func_node) -> str | None:
     body = _find_child_by_field(func_node, "body")
     if body is None:
         return None
+
+    def _try_extract_string(string_node) -> str | None:
+        text = _get_node_text(string_node)
+        if text.startswith(('"""', "'''")):
+            return text[3:-3].strip()
+        elif text.startswith(('"', "'")):
+            return text[1:-1].strip()
+        # tree-sitter 新版可能把 string 拆成 string_start + string_content + string_end
+        for sub in string_node.children:
+            if sub.type == "string_content":
+                return _get_node_text(sub).strip()
+        return None
+
     for child in body.children:
         if child.type == "expression_statement":
             for sub in child.children:
                 if sub.type == "string":
-                    text = _get_node_text(sub)
-                    # 去掉引号
-                    if text.startswith(('"""', "'''")):
-                        return text[3:-3].strip()
-                    elif text.startswith(('"', "'")):
-                        return text[1:-1].strip()
+                    return _try_extract_string(sub)
+        # tree-sitter 某些版本中 docstring 直接是 body > string（无 expression_statement 包裹）
+        elif child.type == "string":
+            return _try_extract_string(child)
+        else:
+            # body 的第一个非空语句不是字符串，则没有 docstring
+            break
     return None
 
 
@@ -298,6 +324,85 @@ def _extract_python_imports(node) -> list[ImportInfo]:
     return imports
 
 
+# ── Swift 专用提取 ──────────────────────────────────────
+
+def _extract_swift_params(func_node) -> list[str]:
+    """提取 Swift 函数参数名列表。
+
+    Swift 参数不在 field 中，而是直接作为 `parameter` 类型的子节点。
+    每个 parameter 的文本格式为 `label name: Type` 或 `name: Type`。
+    """
+    params = []
+    for child in func_node.children:
+        if child.type == "parameter":
+            text = _get_node_text(child).strip()
+            # 解析 Swift 参数：可能是 "label name: Type" 或 "name: Type" 或 "_ name: Type"
+            if ":" in text:
+                before_colon = text.split(":")[0].strip()
+                parts = before_colon.split()
+                # 取最后一个标识符作为参数名（第一个是外部标签）
+                param_name = parts[-1] if parts else before_colon
+                if param_name != "_":
+                    params.append(param_name)
+    return params
+
+
+def _extract_swift_imports(node) -> list[ImportInfo]:
+    """提取 Swift import 语句。
+
+    Swift import 格式: `import Foundation` 或 `import struct Module.Struct`
+    """
+    imports = []
+    if node.type == "import_declaration":
+        # 收集 identifier / simple_identifier 子节点
+        for child in node.children:
+            if child.type == "identifier":
+                module_name = _get_node_text(child)
+                imports.append(ImportInfo(
+                    module=module_name,
+                    line=node.start_point[0] + 1,
+                ))
+    return imports
+
+
+def _extract_swift_inheritance(class_node) -> str | None:
+    """提取 Swift 类/结构体的继承和协议遵循信息。
+
+    Swift 通过 `inheritance_specifier` 子节点表示继承和协议遵循。
+    """
+    parents = []
+    for child in class_node.children:
+        if child.type == "inheritance_specifier":
+            parents.append(_get_node_text(child).strip())
+    return ", ".join(parents) if parents else None
+
+
+def _extract_swift_callee_name(call_node) -> str:
+    """从 Swift call_expression 提取被调用函数名。
+
+    Swift 的 call_expression 结构:
+    - simple_identifier + call_suffix  → 普通调用 e.g. print("hi")
+    - navigation_expression + call_suffix → 成员调用 e.g. service.send(...)
+    - 嵌套 call_expression + navigation_suffix → 链式调用 e.g. JSONDecoder().decode(...)
+    """
+    for child in call_node.children:
+        if child.type == "navigation_expression":
+            # 取 navigation_suffix 中的方法名
+            for sub in child.children:
+                if sub.type == "navigation_suffix":
+                    text = _get_node_text(sub).lstrip(".")
+                    return text
+        elif child.type == "simple_identifier":
+            return _get_node_text(child)
+    # Fallback: 取整个第一个子节点文本
+    if call_node.children:
+        text = _get_node_text(call_node.children[0])
+        if "." in text:
+            return text.split(".")[-1]
+        return text
+    return "<unknown>"
+
+
 # ── 核心解析函数 ─────────────────────────────────────────
 
 async def parse_file(file: FileInfo) -> ParseResult:
@@ -354,16 +459,27 @@ async def parse_file(file: FileInfo) -> ParseResult:
             name_node = _find_child_by_field(node, lang_config["name_field"])
             name = _get_node_text(name_node) if name_node else "<anonymous>"
 
+            # 继承 / 协议遵循
             parent = None
-            sc_field = lang_config.get("superclass_field")
-            if sc_field:
-                sc_node = _find_child_by_field(node, sc_field)
-                if sc_node:
-                    parent = _get_node_text(sc_node).strip("()")
+            if file.language == "swift":
+                parent = _extract_swift_inheritance(node)
+            else:
+                sc_field = lang_config.get("superclass_field")
+                if sc_field:
+                    sc_node = _find_child_by_field(node, sc_field)
+                    if sc_node:
+                        parent = _get_node_text(sc_node).strip("()")
 
             # 收集方法名（需要搜索 body 子节点内的函数定义）
             methods = []
+            # Swift 的 body 字段名为 class_body / protocol_body，不是通用的 "body"
             body_node = _find_child_by_field(node, "body")
+            if body_node is None and file.language == "swift":
+                # Swift: 尝试 class_body 或 protocol_body
+                for child in node.children:
+                    if child.type in ("class_body", "protocol_body", "enum_class_body"):
+                        body_node = child
+                        break
             search_nodes = body_node.children if body_node else node.children
             for child in search_nodes:
                 if child.type in func_types:
@@ -386,10 +502,13 @@ async def parse_file(file: FileInfo) -> ParseResult:
             name = _get_node_text(name_node) if name_node else "<anonymous>"
 
             # 参数
-            params_node = _find_child_by_field(node, lang_config["params_field"])
-            if file.language == "python":
+            if file.language == "swift":
+                params = _extract_swift_params(node)
+            elif file.language == "python":
+                params_node = _find_child_by_field(node, lang_config["params_field"])
                 params = _extract_python_params(params_node)
             else:
+                params_node = _find_child_by_field(node, lang_config["params_field"])
                 params = [_get_node_text(p) for p in (params_node.children if params_node else [])
                           if p.type not in ("(", ")", ",")]
 
@@ -402,6 +521,17 @@ async def parse_file(file: FileInfo) -> ParseResult:
             is_method = bool(class_stack) or (
                 node.parent and node.parent.type in class_types
             )
+            # Swift: 方法的 parent 可能是 class_body / protocol_body
+            if file.language == "swift" and not is_method and node.parent:
+                is_method = node.parent.type in ("class_body", "protocol_body", "enum_class_body")
+                if is_method and not class_stack:
+                    # 尝试从 grandparent 获取类名
+                    grandparent = node.parent.parent
+                    if grandparent:
+                        gp_name = _find_child_by_field(grandparent, "name")
+                        if gp_name:
+                            class_stack.append(_get_node_text(gp_name))
+
             parent_class = class_stack[-1] if class_stack else None
 
             result.functions.append(FunctionInfo(
@@ -418,6 +548,8 @@ async def parse_file(file: FileInfo) -> ParseResult:
         elif node.type in import_types:
             if file.language == "python":
                 result.imports.extend(_extract_python_imports(node))
+            elif file.language == "swift":
+                result.imports.extend(_extract_swift_imports(node))
             else:
                 result.imports.append(ImportInfo(
                     module=_get_node_text(node).strip(),
@@ -427,16 +559,22 @@ async def parse_file(file: FileInfo) -> ParseResult:
         # ── 函数调用 ──
         elif node.type in call_types:
             caller = _find_enclosing_function(node, lang_config)
-            callee = _extract_callee_name(node, file.language)
+            if file.language == "swift":
+                callee = _extract_swift_callee_name(node)
+            else:
+                callee = _extract_callee_name(node, file.language)
             result.calls.append(CallInfo(
                 caller_func=caller,
                 callee_name=callee,
                 line=node.start_point[0] + 1,
             ))
 
-    _walk_tree(root, visitor)
+    def on_leave(node, depth):
+        """离开 class 节点时弹出 class_stack。"""
+        if node.type in class_types and class_stack:
+            class_stack.pop()
 
-    # 清理 class_stack（简化实现，不做精确的范围追踪）
+    _walk_tree(root, visitor, on_leave=on_leave)
     logger.debug(
         "parse_file.done",
         file=file.path,

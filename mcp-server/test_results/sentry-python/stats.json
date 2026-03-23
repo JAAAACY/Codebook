@@ -1,0 +1,16 @@
+{
+  "project": "Sentry Python SDK",
+  "repo_url": "https://github.com/getsentry/sentry-python",
+  "clone_date": "2026-03-23",
+  "file_count": 628,
+  "code_lines": 132637,
+  "languages": {
+    "Python": 470,
+    "Markdown": 35,
+    "JSON": 1,
+    "YAML": 31,
+    "TOML": 4,
+    "HTML": 4
+  },
+  "notes": "实际 Python 行数 132,637 远超预估 3 万。原因：SDK 包含 40+ 框架集成模块（Django/Flask/Celery/FastAPI 等）和大量集成测试，预估值可能仅指核心 SDK 代码。"
+}

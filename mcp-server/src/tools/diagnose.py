@@ -11,6 +11,7 @@
 import os
 import re
 from collections import deque
+from datetime import datetime
 
 import structlog
 
@@ -18,6 +19,9 @@ from src.parsers.ast_parser import ParseResult, FunctionInfo, ClassInfo
 from src.parsers.dependency_graph import DependencyGraph
 from src.parsers.module_grouper import ModuleGroup
 from src.tools._repo_cache import repo_cache
+from src.memory.project_memory import ProjectMemory
+from src.memory.models import DiagnosisRecord
+from src.summarizer.engine import _normalize_role
 
 logger = structlog.get_logger()
 
@@ -412,16 +416,27 @@ def _build_context_text(
 # ── 角色 guidance ─────────────────────────────────────────
 
 ROLE_GUIDANCE = {
-    "pm": (
-        "你是 CodeBook 的 AI 助手，正在帮助产品经理定位问题。\n"
-        "用产品视角解释代码调用链，关注用户体验影响和功能逻辑。\n"
-        "避免技术术语，用业务语言描述问题所在位置和影响范围。"
-    ),
     "dev": (
         "你是 CodeBook 的 AI 助手，正在帮助开发者定位问题。\n"
         "提供精确的代码定位、调用链分析和修复建议。\n"
-        "可以使用技术术语，重点关注代码逻辑和实现细节。"
+        "关键信息：函数签名、参数类型、返回值、异常处理、循环依赖、性能瓶颈。\n"
+        "可以使用所有技术术语（AST、序列化、中间件、幂等性等）。\n"
+        "重点关注代码逻辑和实现细节。"
     ),
+    "pm": (
+        "你是 CodeBook 的 AI 助手，正在帮助产品经理定位问题。\n"
+        "用产品视角解释代码调用链，关注用户体验影响和功能逻辑。\n"
+        "关键信息：功能完整性、用户体验影响、工作量估算、依赖关系。\n"
+        "避免技术术语，用业务语言描述问题所在位置和影响范围。\n"
+        "重点强调这个问题如何影响用户体验。"
+    ),
+    "domain_expert": (
+        "你是 CodeBook 的 AI 助手，正在帮助行业专家审查代码。\n"
+        "关键信息：业务规则验证、合规检查、风险识别、审计记录。\n"
+        "重点识别涉及数据安全、合规要求、业务规则的代码部分。\n"
+        "用该领域的专业术语翻译代码逻辑，让专家能够验证实现是否符合行业标准。"
+    ),
+    # 向后兼容：旧角色映射到新视图
     "ceo": (
         "你是 CodeBook 的 AI 助手，正在帮助决策者了解技术问题。\n"
         "用商业语言解释问题的影响范围和严重程度。\n"
@@ -519,6 +534,7 @@ async def diagnose(module_name: str = "all", role: str = "pm", query: str = "") 
 
     if not matches:
         # 降级：返回模块级信息
+        normalized_role = _normalize_role(role)
         return {
             "status": "no_exact_match",
             "message": "未找到与描述精确匹配的代码节点，返回模块级概览",
@@ -530,7 +546,7 @@ async def diagnose(module_name: str = "all", role: str = "pm", query: str = "") 
             "exact_locations": [],
             "context": f"查询关键词 {keywords} 未在函数/类名中找到匹配。"
                         f"匹配的模块: {', '.join(matched_modules)}",
-            "guidance": ROLE_GUIDANCE.get(role, ROLE_GUIDANCE["pm"]),
+            "guidance": ROLE_GUIDANCE.get(normalized_role, ROLE_GUIDANCE["pm"]),
         }
 
     # 5. 追踪调用链
@@ -562,7 +578,8 @@ async def diagnose(module_name: str = "all", role: str = "pm", query: str = "") 
         locations=len(locations),
     )
 
-    return {
+    normalized_role = _normalize_role(role)
+    result = {
         "status": "ok",
         "module_name": module_name,
         "role": role,
@@ -578,5 +595,30 @@ async def diagnose(module_name: str = "all", role: str = "pm", query: str = "") 
         "call_chain": mermaid,
         "exact_locations": locations,
         "context": context_text,
-        "guidance": ROLE_GUIDANCE.get(role, ROLE_GUIDANCE["pm"]),
+        "guidance": ROLE_GUIDANCE.get(normalized_role, ROLE_GUIDANCE["pm"]),
     }
+
+    # Persist diagnosis to ProjectMemory for each matched module
+    try:
+        repo_url = getattr(ctx.clone_result, "repo_url", None) or ""
+        if repo_url:
+            memory = ProjectMemory(repo_url)
+            # Extract diagnosis summary from context and locations
+            diagnosis_summary = f"Found {len(seed_node_ids)} matching nodes in call chain"
+            matched_locations = [loc.get("ref", "") for loc in locations if loc.get("ref")]
+
+            # Persist for target module if specified
+            if module_name != "all":
+                for m in (chain_modules or matched_modules):
+                    record = DiagnosisRecord(
+                        query=query,
+                        diagnosis_summary=diagnosis_summary,
+                        matched_locations=matched_locations,
+                        timestamp=datetime.utcnow().isoformat() + "Z",
+                    )
+                    memory.add_diagnosis(m, record)
+            logger.info("diagnose.persisted", modules=len(chain_modules or matched_modules))
+    except Exception as e:
+        logger.exception("diagnose.persistence_failed", error=str(e))
+
+    return result

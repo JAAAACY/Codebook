@@ -40,7 +40,7 @@ async def codegen(
             如果为 None，则需要 file_paths 参数指定要修改的文件。
         file_paths: 要修改的文件路径列表（相对于 repo_path）。
             与 locate_result 互补：locate_result 优先，file_paths 作为补充或 fallback。
-        role: 目标角色，决定输出的语言风格。
+        role: 目标角色，决定输出的语言风格。支持：dev, pm, domain_expert（或向后兼容的旧名称：ceo, investor, qa）。
 
     Returns:
         {

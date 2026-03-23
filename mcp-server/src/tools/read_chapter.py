@@ -11,11 +11,13 @@ P0 修复：大模块（如 Flask 的 src/flask，9201 行 23 文件）返回值
 
 import os
 import time
+from datetime import datetime
 
 import structlog
 
 from src.summarizer.engine import SummaryContext
 from src.tools._repo_cache import repo_cache
+from src.memory.project_memory import ProjectMemory
 
 logger = structlog.get_logger()
 
@@ -30,7 +32,7 @@ async def read_chapter(module_name: str, role: str = "pm") -> dict:
 
     Args:
         module_name: 模块名称（业务语言，如「用户认证」），或目录名（如 app/api）。
-        role: 目标角色。可选: ceo, pm, investor, qa。
+        role: 目标角色。支持：dev, pm, domain_expert（或向后兼容的旧名称：ceo, investor, qa）。
 
     Returns:
         包含 module_cards（JSON 数组）和 dependency_graph（Mermaid）的字典。
@@ -91,6 +93,34 @@ async def read_chapter(module_name: str, role: str = "pm") -> dict:
     elapsed = round(time.time() - start, 2)
     logger.info("read_chapter.done", module=target.name,
                 cards=len(chapter.get("module_cards", [])), seconds=elapsed)
+
+    # Increment view_count in ProjectMemory
+    try:
+        repo_url = getattr(ctx.clone_result, "repo_url", None) or ""
+        if repo_url:
+            memory = ProjectMemory(repo_url)
+            path = memory._get_json_path("understanding.json")
+            data = memory._safe_read_json(path)
+            if "modules" not in data:
+                data = {"version": 1, "modules": {}}
+            if target.name not in data["modules"]:
+                data["modules"][target.name] = {
+                    "module_name": target.name,
+                    "diagnoses": [],
+                    "qa_history": [],
+                    "annotations": [],
+                    "view_count": 1,
+                    "diagnose_count": 0,
+                    "ask_count": 0,
+                    "last_accessed": datetime.utcnow().isoformat() + "Z",
+                }
+            else:
+                data["modules"][target.name]["view_count"] += 1
+                data["modules"][target.name]["last_accessed"] = datetime.utcnow().isoformat() + "Z"
+            memory._safe_write_json(path, data)
+            logger.info("read_chapter.view_count_updated", module=target.name)
+    except Exception as e:
+        logger.exception("read_chapter.view_count_update_failed", error=str(e))
 
     chapter["role"] = role
     return chapter

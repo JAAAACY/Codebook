@@ -1,0 +1,68 @@
+{
+  "domain": "healthcare",
+  "version": "1.0",
+  "display_name": "Healthcare & Medical",
+  "description": "Medical and healthcare system terminology",
+  "terms": [
+    {
+      "source_term": "FHIR",
+      "target_phrase": "快速医疗互操作资源（FHIR 标准）"
+    },
+    {
+      "source_term": "diagnosis",
+      "target_phrase": "诊断结果"
+    },
+    {
+      "source_term": "prescription",
+      "target_phrase": "处方"
+    },
+    {
+      "source_term": "vital signs",
+      "target_phrase": "生命体征"
+    },
+    {
+      "source_term": "EMR",
+      "target_phrase": "电子病历"
+    },
+    {
+      "source_term": "pharmacy",
+      "target_phrase": "药房"
+    },
+    {
+      "source_term": "appointment",
+      "target_phrase": "挂号预约"
+    },
+    {
+      "source_term": "billing cycle",
+      "target_phrase": "医疗账单周期"
+    },
+    {
+      "source_term": "consent form",
+      "target_phrase": "知情同意书"
+    },
+    {
+      "source_term": "patient intake",
+      "target_phrase": "患者入院登记"
+    },
+    {
+      "source_term": "treatment protocol",
+      "target_phrase": "治疗方案"
+    },
+    {
+      "source_term": "adverse event",
+      "target_phrase": "不良事件"
+    },
+    {
+      "source_term": "clinical trial",
+      "target_phrase": "临床试验"
+    },
+    {
+      "source_term": "dosage",
+      "target_phrase": "用药剂量"
+    },
+    {
+      "source_term": "triage",
+      "target_phrase": "分诊优先级"
+    }
+  ]
+}

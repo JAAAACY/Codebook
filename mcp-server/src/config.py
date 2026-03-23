@@ -23,15 +23,12 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     log_level: str = "INFO"
 
-    # AI provider
-    ai_model: str = "claude-sonnet-4-20250514"
-    ai_max_tokens: int = 8192
-
     # 仓库扫描
     max_repo_size_mb: int = 100
     clone_timeout_seconds: int = 120
     supported_languages: list[str] = [
-        "python", "typescript", "javascript", "java", "go", "rust", "cpp", "c", "csharp", "ruby",
+        "python", "typescript", "javascript", "java", "go", "rust", "cpp", "csharp",
+        "swift",
     ]
 
     # 缓存

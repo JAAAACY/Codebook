@@ -3,12 +3,23 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codebook-mcp-server"
-version = "0.1.0"
-description = "CodeBook MCP Server — 让不会写代码的人也能理解、诊断和修改软件产品"
+name = "codebook-mcp"
+version = "0.2.0"
+description = "CodeBook — 让不会写代码的人也能理解、诊断和修改软件产品。一键安装的 MCP Server。"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+keywords = ["mcp", "code-understanding", "ai-tools", "claude", "cursor", "codebook"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Documentation",
+]
 dependencies = [
     "mcp[cli]>=1.2.0",
     "structlog>=24.1.0",
@@ -24,7 +35,14 @@ dev = [
 ]
 
 [project.scripts]
-codebook = "src.server:main"
+codebook = "src.cli:cli_main"
+codebook-server = "src.server:main"
+
+[project.urls]
+Homepage = "https://github.com/codebook-app/codebook"
+Documentation = "https://codebook.app/docs"
+Repository = "https://github.com/codebook-app/codebook"
+Issues = "https://github.com/codebook-app/codebook/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

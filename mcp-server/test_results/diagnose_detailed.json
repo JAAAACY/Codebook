@@ -1,0 +1,137 @@
+[
+  {
+    "scenario": "cross_file_chain",
+    "query": "Cross-file error handling and validation",
+    "status": "ok",
+    "response_time_seconds": 0.010005474090576172,
+    "keyword_extraction": {
+      "keywords": [
+        "cross-file",
+        "error",
+        "handling",
+        "validation"
+      ],
+      "keywords_count": 4
+    },
+    "matched_nodes": {
+      "total": 5,
+      "by_type": {
+        "unknown": 5
+      },
+      "top_3": [
+        {
+          "node_id": "tests/integrations/ariadne/test_ariadne.py::test_capture_validation_error",
+          "score": 4.0,
+          "label": "test_capture_validation_error"
+        },
+        {
+          "node_id": "tests/integrations/langchain/test_langchain.py::test_langchain_embeddings_error_handling",
+          "score": 4.0,
+          "label": "test_langchain_embeddings_error_handling"
+        },
+        {
+          "node_id": "tests/integrations/starlette/test_starlette.py::test_starletterequestextractor_malformed_json_error_handling",
+          "score": 4.0,
+          "label": "test_starletterequestextractor_malformed_json_error_handling"
+        }
+      ]
+    },
+    "exact_locations": {
+      "total": 26,
+      "by_type": {
+        "function": 15,
+        "class": 8,
+        "method": 3
+      },
+      "top_3": [
+        {
+          "file": "tests/integrations/ariadne/test_ariadne.py",
+          "line_range": "190-225",
+          "priority": "high"
+        },
+        {
+          "file": "tests/integrations/langchain/test_langchain.py",
+          "line_range": "1515-1551",
+          "priority": "high"
+        },
+        {
+          "file": "tests/integrations/starlette/test_starlette.py",
+          "line_range": "1369-1390",
+          "priority": "high"
+        }
+      ]
+    },
+    "call_chain": {
+      "present": true,
+      "character_length": 7977
+    }
+  },
+  {
+    "scenario": "business_logic",
+    "query": "Data flow and core business logic",
+    "status": "ok",
+    "response_time_seconds": 0.013250112533569336,
+    "keyword_extraction": {
+      "keywords": [
+        "data",
+        "flow",
+        "core",
+        "business",
+        "logic"
+      ],
+      "keywords_count": 5
+    },
+    "matched_nodes": {
+      "total": 5,
+      "by_type": {
+        "unknown": 5
+      },
+      "top_3": [
+        {
+          "node_id": "sentry_sdk/integrations/openai_agents/spans/agent_workflow.py::agent_workflow_span",
+          "score": 3.0,
+          "label": "agent_workflow_span"
+        },
+        {
+          "node_id": "tests/conftest.py::parse_sse_data_package",
+          "score": 2.0,
+          "label": "parse_sse_data_package"
+        },
+        {
+          "node_id": "tests/test_scrubber.py::test_span_data_scrubbing",
+          "score": 2.0,
+          "label": "test_span_data_scrubbing"
+        }
+      ]
+    },
+    "exact_locations": {
+      "total": 31,
+      "by_type": {
+        "function": 29,
+        "method": 1,
+        "class": 1
+      },
+      "top_3": [
+        {
+          "file": "sentry_sdk/integrations/openai_agents/spans/agent_workflow.py",
+          "line_range": "12-19",
+          "priority": "high"
+        },
+        {
+          "file": "tests/conftest.py",
+          "line_range": "908-911",
+          "priority": "high"
+        },
+        {
+          "file": "tests/test_scrubber.py",
+          "line_range": "152-167",
+          "priority": "high"
+        }
+      ]
+    },
+    "call_chain": {
+      "present": true,
+      "character_length": 7211
+    }
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "project": "vscode",
+  "repo_url": "https://github.com/microsoft/vscode",
+  "clone_date": "2026-03-23",
+  "file_count": 9902,
+  "code_lines": 599486,
+  "languages": {
+    "TypeScript": 6845,
+    "JSON": 1035,
+    "JavaScript": 100,
+    "Markdown": 168,
+    "Python": 3,
+    "TSX": 3
+  }
+}

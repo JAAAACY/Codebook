@@ -14,6 +14,8 @@ from src.tools.codegen import codegen as _codegen
 from src.tools.diagnose import diagnose as _diagnose
 from src.tools.read_chapter import read_chapter as _read_chapter
 from src.tools.scan_repo import scan_repo as _scan_repo
+from src.tools.term_correct import term_correct as _term_correct
+from src.tools.memory_feedback import memory_feedback as _memory_feedback
 
 # ── 日志配置 ──────────────────────────────────────────────
 structlog.configure(
@@ -153,6 +155,64 @@ async def ask_about(
         question=question,
         role=role.value,
         conversation_history=conversation_history or [],
+    )
+
+
+@mcp.tool()
+async def term_correct(
+    source_term: str,
+    correct_translation: str,
+    wrong_translation: str = "",
+    context: str = "",
+) -> dict:
+    """纠正项目术语映射（术语纠正能力）。
+
+    用于 PM、领域专家等角色显式纠正代码术语到业务语言的映射。纠正后
+    优先级最高，所有后续的 scan_repo、read_chapter、diagnose 等工具
+    都会优先使用该纠正，确保术语翻译的一致性。
+
+    Args:
+        source_term: 原始代码术语（如 "idempotent"）。
+        correct_translation: 正确的翻译或业务术语（如 "幂等操作"）。
+        wrong_translation: 可选。之前的错误翻译（用于记录和文档）。
+        context: 可选。此纠正适用的场景（如 "API 响应"、"支付对账"）。
+    """
+    logger.info("tool.term_correct", source_term=source_term, context=context)
+    return await _term_correct(
+        source_term=source_term,
+        correct_translation=correct_translation,
+        wrong_translation=wrong_translation,
+        context=context,
+    )
+
+
+@mcp.tool()
+async def memory_feedback(
+    module_name: str,
+    question: str,
+    answer_summary: str,
+    confidence: float = 0.9,
+    follow_ups_used: list[str] | None = None,
+) -> dict:
+    """记录 ask_about 的回答摘要到项目记忆系统（记忆反馈能力）。
+
+    在 MCP 宿主（Claude Desktop）生成完整回答后，调用此工具记录关键信息
+    到 ProjectMemory，用于后续会话的上下文增强和知识热点识别。
+
+    Args:
+        module_name: 被追问的模块名称。
+        question: 用户提出的问题。
+        answer_summary: 回答摘要（关键结论，不是完整回答）。
+        confidence: 可选。回答的置信度（0.0-1.0，默认 0.9）。
+        follow_ups_used: 可选。用户在后续追问中实际使用的方向列表。
+    """
+    logger.info("tool.memory_feedback", module_name=module_name, confidence=confidence)
+    return await _memory_feedback(
+        module_name=module_name,
+        question=question,
+        answer_summary=answer_summary,
+        confidence=confidence,
+        follow_ups_used=follow_ups_used or [],
     )
 
 

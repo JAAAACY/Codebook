@@ -9,6 +9,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import structlog
 
@@ -17,6 +18,7 @@ from src.parsers.ast_parser import ParseResult
 from src.parsers.dependency_graph import DependencyGraph
 from src.parsers.module_grouper import ModuleGroup
 from src.parsers.repo_cloner import CloneResult
+from src.glossary.term_resolver import TermResolver
 
 logger = structlog.get_logger()
 
@@ -36,6 +38,7 @@ class SummaryContext:
     modules: list[ModuleGroup]
     dep_graph: DependencyGraph
     role: str = "pm"
+    repo_url: Optional[str] = None
 
 
 @dataclass
@@ -104,7 +107,14 @@ def _load_prompt_template(level: str) -> dict:
 
 
 def _load_codebook_config() -> dict:
-    """加载 codebook_config_v0.2.json。"""
+    """加载 codebook_config_v0.3.json，回退到 v0.2。"""
+    # Try v0.3 first
+    v0_3_path = Path(__file__).resolve().parent.parent.parent.parent / "prompts" / "codebook_config_v0.3.json"
+    if v0_3_path.exists():
+        with open(v0_3_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    # Fallback to v0.2
     if not CONFIG_PATH.exists():
         logger.warning("config.not_found", path=str(CONFIG_PATH))
         return {}
@@ -112,16 +122,110 @@ def _load_codebook_config() -> dict:
         return json.load(f)
 
 
-def _get_banned_terms() -> str:
-    """获取禁用术语表的文本形式。"""
+def _normalize_role(role: str) -> str:
+    """将旧角色名映射到新视图系统。
+
+    Args:
+        role: 原始角色名
+
+    Returns:
+        规范化的角色名（dev/pm/domain_expert）
+    """
+    config = _load_codebook_config()
+    mappings = config.get("backward_compatibility", {}).get("mappings", {})
+
+    normalized = mappings.get(role, role)
+
+    # 校验规范化后的角色是否有效
+    valid_roles = {"dev", "pm", "domain_expert"}
+    if normalized not in valid_roles:
+        logger.warning("invalid_role", original=role, normalized=normalized)
+        return "pm"  # Default fallback
+
+    if normalized != role:
+        logger.debug("role_mapped", original=role, mapped_to=normalized)
+
+    return normalized
+
+
+def _get_banned_terms(repo_url: Optional[str] = None, role: str = "pm") -> str:
+    """获取禁用术语表的文本形式。
+
+    首先尝试通过 TermResolver 获取（如果提供了 repo_url），
+    失败或无 repo_url 时，回退到 JSON 配置文件读取。
+    dev 视角不应用禁用术语；只在 pm 视角应用。
+
+    Args:
+        repo_url: 仓库 URL，用于通过 TermResolver 加载术语
+        role: 角色名（dev/pm/domain_expert）
+
+    Returns:
+        格式化的术语表文本，用于注入 prompt
+    """
+    # dev 视角无禁用术语
+    if role == "dev":
+        logger.debug("banned_terms.skipped_for_dev_role")
+        return ""
+
+    # 尝试通过 TermResolver 获取（优先级更高）
+    if repo_url:
+        try:
+            resolver = TermResolver(repo_url)
+            resolved = resolver.resolve()
+            if resolved:
+                logger.debug("banned_terms.from_resolver", repo_url=repo_url, role=role)
+                return resolved
+        except Exception as e:
+            logger.debug(
+                "banned_terms.resolver_failed",
+                repo_url=repo_url,
+                error=str(e),
+            )
+            # 继续回退到 JSON 读取
+
+    # 回退到 JSON 配置文件
     config = _load_codebook_config()
     banned = config.get("banned_terms_in_pm_fields", {}).get("terms", {})
     if not banned:
+        logger.debug("banned_terms.not_configured", role=role)
         return "（未配置禁用术语表）"
+
     lines = []
     for term, replacement in banned.items():
         lines.append(f"- 「{term}」→ {replacement}")
+
+    logger.debug("banned_terms.from_config", term_count=len(banned), role=role)
     return "\n".join(lines)
+
+
+def _get_role_guidance(role: str, project_domain: Optional[str] = None) -> str:
+    """获取特定角色和领域的 guidance 文本。
+
+    Args:
+        role: 规范化的角色名（dev/pm/domain_expert）
+        project_domain: 项目领域（用于 domain_expert 视角，如 fintech）
+
+    Returns:
+        guidance 文本
+    """
+    config = _load_codebook_config()
+    guidance_templates = config.get("guidance_templates", {})
+
+    if role == "domain_expert" and project_domain:
+        # 查找特定领域的 guidance
+        domain_key = f"domain_expert_{project_domain}"
+        if domain_key in guidance_templates:
+            logger.debug("guidance.loaded", role=role, domain=project_domain)
+            return guidance_templates[domain_key]
+
+    # 回退到通用 guidance
+    guidance = guidance_templates.get(role, "")
+    if not guidance:
+        logger.warning("guidance.not_found", role=role, project_domain=project_domain)
+        return ""
+
+    logger.debug("guidance.loaded", role=role)
+    return guidance
 
 
 def _get_http_annotations() -> str:
@@ -325,7 +429,11 @@ def build_l2_prompt(ctx: SummaryContext, project_summary: str = "") -> tuple[str
     """构建 L2 模块总览的 system + user prompt。"""
     template = _load_prompt_template("L2")
 
-    system = _safe_format(template["system_prompt"], banned_terms=_get_banned_terms())
+    # 规范化角色并获取 guidance
+    normalized_role = _normalize_role(ctx.role)
+    banned_terms = _get_banned_terms(ctx.repo_url, role=normalized_role)
+
+    system = _safe_format(template["system_prompt"], banned_terms=banned_terms)
     user = _safe_format(
         template["user_prompt"],
         project_summary=project_summary or "(待生成)",
@@ -344,10 +452,14 @@ def build_l3_prompt(
     """构建 L3 模块卡片的 system + user prompt。"""
     template = _load_prompt_template("L3")
 
+    # 规范化角色并获取 guidance
+    normalized_role = _normalize_role(ctx.role)
+    banned_terms = _get_banned_terms(ctx.repo_url, role=normalized_role)
+
     system = _safe_format(
         template["system_prompt"],
         http_status_annotations=_get_http_annotations(),
-        banned_terms=_get_banned_terms(),
+        banned_terms=banned_terms,
     )
 
     upstream, downstream = _get_upstream_downstream(module, ctx.dep_graph, ctx.modules)

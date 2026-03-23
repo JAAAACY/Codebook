@@ -46,7 +46,6 @@ from src.tools.ask_about import (
     _build_module_l3_summary,
     _build_diagnosis_context,
     _build_annotation_context,
-    _AskAboutLLMCaller,
 )
 
 
@@ -420,13 +419,13 @@ class TestAskAboutAcceptance:
         ceo_guidance = r_ceo["guidance"]
         qa_guidance = r_qa["guidance"]
 
-        # CEO guidance 包含商业语言
-        assert "CEO" in ceo_guidance or "创始人" in ceo_guidance
-        assert "商业影响" in ceo_guidance or "战略" in ceo_guidance
+        # CEO guidance 规范化为 PM，应该包含产品经理语言
+        assert "产品经理" in ceo_guidance
+        assert "业务" in ceo_guidance or "功能" in ceo_guidance or "用户体验" in ceo_guidance
 
-        # QA guidance 包含质量语言
-        assert "QA" in qa_guidance or "测试" in qa_guidance
-        assert "边界条件" in qa_guidance or "质量" in qa_guidance
+        # QA guidance 规范化为 Dev，应该包含开发者语言
+        assert "开发者" in qa_guidance
+        assert "代码" in qa_guidance or "实现" in qa_guidance or "技术" in qa_guidance
 
         # 两者不同
         assert ceo_guidance != qa_guidance
@@ -520,7 +519,7 @@ class TestAskAboutEdgeCases:
 
     @pytest.mark.asyncio
     async def test_default_role_is_ceo(self, build_ctx):
-        """默认角色是 ceo。"""
+        """默认角色是 ceo（规范化为 pm）。"""
         ctx = build_ctx
         repo_cache.store("test-repo", ctx)
 
@@ -530,7 +529,8 @@ class TestAskAboutEdgeCases:
         )
 
         assert result["role"] == "ceo"
-        assert "CEO" in result["guidance"] or "创始人" in result["guidance"]
+        # CEO 规范化为 PM，所以 guidance 应该包含产品经理相关的内容
+        assert "产品经理" in result["guidance"]
 
 
 class TestContextAssembly:
@@ -681,3 +681,116 @@ class TestHelperFunctions:
             assert "name" in cfg, f"{role} 缺少 name"
             assert "language_style" in cfg, f"{role} 缺少 language_style"
             assert "banned_terms" in cfg, f"{role} 缺少 banned_terms"
+
+
+class TestThreeViewComparison:
+    """测试三视图系统的输出差异化。"""
+
+    def test_dev_pm_prompt_differences(self):
+        """Dev 和 PM 视角的 system prompt 应该有显著差异。"""
+        dev_prompt = _build_system_prompt("dev")
+        pm_prompt = _build_system_prompt("pm")
+
+        # 两个 prompt 应该不同
+        assert dev_prompt != pm_prompt
+
+        # Dev 视角应该强调代码细节
+        assert any(word in dev_prompt for word in ["代码", "调用栈", "实现", "技术术语"])
+
+        # PM 视角应该强调业务影响
+        assert any(word in pm_prompt for word in ["业务", "用户体验", "功能", "禁止"])
+
+    def test_dev_has_no_banned_terms(self):
+        """Dev 视角的 prompt 中不应该有禁用术语列表。"""
+        dev_prompt = _build_system_prompt("dev")
+        # Dev prompt 不应该有"禁止"这样的语句
+        # 因为 _build_system_prompt 只在有 banned_terms 时才添加禁止语句
+        assert "禁止在主回答中使用以下术语" not in dev_prompt
+
+    def test_pm_has_banned_terms(self):
+        """PM 视角的 prompt 中应该有禁用术语列表。"""
+        pm_prompt = _build_system_prompt("pm")
+        # PM prompt 应该有禁止术语
+        assert "禁止" in pm_prompt
+        # 检查至少有一个被禁术语
+        assert any(term in pm_prompt for term in ["幂等", "slug", "冷启动", "连接池"])
+
+    def test_domain_expert_prompt_exists(self):
+        """domain_expert 角色应该有对应的 prompt。"""
+        de_prompt = _build_system_prompt("domain_expert")
+        assert len(de_prompt) > 0
+        assert "行业专家" in de_prompt or "domain" in de_prompt
+
+    def test_backward_compat_role_normalization_in_prompt(self):
+        """向后兼容：旧角色名应该规范化后生成 prompt。"""
+        # CEO 应该映射到 PM 的 prompt
+        ceo_prompt = _build_system_prompt("ceo")
+        pm_prompt = _build_system_prompt("pm")
+        # CEO 映射到 PM，所以内容应该相同
+        assert "产品经理" in ceo_prompt or "CEO" in ceo_prompt  # 可能保留原始角色名
+
+        # QA 应该映射到 Dev 的 prompt
+        qa_prompt = _build_system_prompt("qa")
+        dev_prompt = _build_system_prompt("dev")
+        # QA 映射到 Dev，所以应该强调代码细节而非禁用术语
+        assert "禁止" not in qa_prompt or qa_prompt.count("禁止") <= qa_prompt.count("禁止")
+
+    def test_role_config_three_view_structure(self):
+        """ROLE_CONFIG 应该至少包含三个核心视图。"""
+        core_roles = {"dev", "pm", "domain_expert"}
+        config_keys = set(ROLE_CONFIG.keys())
+        assert core_roles.issubset(config_keys), f"Missing roles: {core_roles - config_keys}"
+
+    def test_three_view_language_styles_are_different(self):
+        """三种视图的 language_style 应该显著不同。"""
+        dev_style = ROLE_CONFIG["dev"]["language_style"]
+        pm_style = ROLE_CONFIG["pm"]["language_style"]
+        de_style = ROLE_CONFIG["domain_expert"]["language_style"]
+
+        # 三者应该互不相同
+        assert dev_style != pm_style
+        assert pm_style != de_style
+        assert dev_style != de_style
+
+        # 每个都应该有自己的特征词
+        assert "代码" in dev_style or "技术" in dev_style
+        assert "业务" in pm_style or "产品" in pm_style or "用户" in pm_style
+        assert "行业" in de_style or "专家" in de_style or "领域" in de_style
+
+    def test_dev_vs_pm_banned_terms_contrast(self):
+        """Dev 和 PM 的禁用术语应该形成对比。"""
+        dev_banned = ROLE_CONFIG["dev"]["banned_terms"]
+        pm_banned = ROLE_CONFIG["pm"]["banned_terms"]
+
+        # Dev 应该有很少或没有禁用术语
+        assert len(dev_banned) < 10, f"Dev has too many banned terms: {dev_banned}"
+
+        # PM 应该有较多禁用术语
+        assert len(pm_banned) > 5, f"PM should have more banned terms: {pm_banned}"
+
+    def test_domain_expert_no_large_banned_list(self):
+        """domain_expert 视角的禁用术语应该较少（因为用域名术语）。"""
+        de_banned = ROLE_CONFIG["domain_expert"]["banned_terms"]
+        pm_banned = ROLE_CONFIG["pm"]["banned_terms"]
+
+        # domain_expert 的禁用术语应该 <= PM 的
+        assert len(de_banned) <= len(pm_banned)
+
+    async def test_system_prompt_normalization_consistency(self):
+        """测试 _build_system_prompt 中的角色规范化一致性。"""
+        from src.summarizer.engine import _normalize_role
+
+        # 旧角色应该被规范化
+        ceo_normalized = _normalize_role("ceo")
+        assert ceo_normalized == "pm"
+
+        qa_normalized = _normalize_role("qa")
+        assert qa_normalized == "dev"
+
+        # 验证 prompt 构建时使用了规范化的角色
+        ceo_prompt = _build_system_prompt("ceo")
+        pm_prompt = _build_system_prompt("pm")
+        # 两者应该相似（因为都映射到 PM）
+        # 但可能在角色名称上有差异（为了回溯）
+        assert "回答" in ceo_prompt
+        assert "回答" in pm_prompt

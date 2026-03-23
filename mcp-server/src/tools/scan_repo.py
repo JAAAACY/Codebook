@@ -17,11 +17,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 
 import structlog
 
+from src.memory.project_memory import ProjectMemory
 from src.parsers.ast_parser import ParseResult, parse_all
 from src.parsers.dependency_graph import DependencyGraph
 from src.parsers.module_grouper import (
@@ -69,13 +72,15 @@ def _health_from_lines(total_lines: int) -> str:
 
 def _role_badge(role: str) -> str:
     """根据角色生成角色标签。"""
+    from src.summarizer.engine import _normalize_role
+
+    normalized_role = _normalize_role(role)
     badges = {
-        "ceo": "CEO 视角：关注商业价值与战略意义",
-        "pm": "PM 视角：关注功能完整性与风险",
-        "investor": "投资人视角：关注技术壁垒与可扩展性",
-        "qa": "QA 视角：关注测试覆盖与边界条件",
+        "dev": "开发者视角：关注代码逻辑、性能瓶颈、边界条件",
+        "pm": "PM 视角：关注功能完整性、变更影响、风险识别",
+        "domain_expert": "行业专家视角：关注业务规则验证、合规检查、风险识别",
     }
-    return badges.get(role, f"{role} 视角")
+    return badges.get(normalized_role, f"{normalized_role} 视角")
 
 
 def _build_project_overview(
@@ -504,6 +509,7 @@ async def scan_repo(
         modules=modules,
         dep_graph=dep_graph,
         role=role,
+        repo_url=repo_url,
     )
 
     # 缓存 context 供 read_chapter / diagnose / ask_about 使用

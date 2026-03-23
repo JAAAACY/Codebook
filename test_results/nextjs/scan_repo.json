@@ -1,0 +1,6 @@
+{
+  "status": "timeout",
+  "timeout_seconds": 900,
+  "reason": "Large repository (28k files) - graph building step exceeded timeout",
+  "note": "NextJS is a monorepo with extensive build artifacts and test fixtures. The dependency graph construction step becomes quadratic with node count, causing timeout on this scale."
+}

@@ -1,0 +1,68 @@
+{
+  "domain": "fintech",
+  "version": "1.0",
+  "display_name": "Financial Technology",
+  "description": "Financial and payment processing terminology",
+  "terms": [
+    {
+      "source_term": "KYC",
+      "target_phrase": "客户身份验证（Know Your Customer）"
+    },
+    {
+      "source_term": "AML",
+      "target_phrase": "反洗钱检查"
+    },
+    {
+      "source_term": "settlement",
+      "target_phrase": "资金结算"
+    },
+    {
+      "source_term": "ledger",
+      "target_phrase": "账本记录"
+    },
+    {
+      "source_term": "reconciliation",
+      "target_phrase": "对账"
+    },
+    {
+      "source_term": "transaction rollback",
+      "target_phrase": "交易撤销"
+    },
+    {
+      "source_term": "clearing",
+      "target_phrase": "清算处理"
+    },
+    {
+      "source_term": "charge-off",
+      "target_phrase": "坏账核销"
+    },
+    {
+      "source_term": "disbursement",
+      "target_phrase": "资金拨付"
+    },
+    {
+      "source_term": "collateral",
+      "target_phrase": "抵押品"
+    },
+    {
+      "source_term": "counterparty risk",
+      "target_phrase": "交易对手风险"
+    },
+    {
+      "source_term": "liquidity",
+      "target_phrase": "流动性"
+    },
+    {
+      "source_term": "hedge",
+      "target_phrase": "风险对冲"
+    },
+    {
+      "source_term": "escrow",
+      "target_phrase": "第三方托管"
+    },
+    {
+      "source_term": "chargeback",
+      "target_phrase": "退款异议"
+    }
+  ]
+}

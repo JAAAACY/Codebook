@@ -1,0 +1,12 @@
+{
+  "project": "fastapi",
+  "repo_url": "https://github.com/tiangolo/fastapi",
+  "clone_date": "2026-03-23",
+  "file_count": 2952,
+  "code_lines": 356038,
+  "languages": {
+    "Python": 1118,
+    "JavaScript": 4,
+    "Markdown": 1554
+  }
+}

@@ -32,7 +32,6 @@ from src.tools.codegen_engine import (
     CodegenOutputParser,
     ExactLocation,
     LocateResult,
-    LLMCaller,
     CODEGEN_SYSTEM_PROMPT,
 )
 
@@ -199,17 +198,6 @@ def _make_mock_llm_output(repo_path: Path) -> str:
             },
         ],
     }, ensure_ascii=False)
-
-
-class MockLLMCaller(LLMCaller):
-    """Mock LLM，返回基于实际文件内容的精确 diff。"""
-
-    def __init__(self, repo_path: Path):
-        super().__init__()
-        self.repo_path = repo_path
-
-    async def call(self, messages: list[dict[str, str]]) -> str:
-        return _make_mock_llm_output(self.repo_path)
 
 
 # ── 测试 ──────────────────────────────────────────────────
@@ -408,7 +396,6 @@ class TestCodegenAcceptance:
 
         self.engine = CodegenEngine(
             repo_path=str(self.work_dir),
-            llm_caller=MockLLMCaller(self.work_dir),
         )
 
     @pytest.mark.asyncio
@@ -554,6 +541,99 @@ class TestCodegenAcceptance:
             assert f in result["current_code"]
 
         print("\n✅ 输出结构完整性验证通过")
+
+    @pytest.mark.asyncio
+    async def test_boundary_empty_instruction_accepted(self):
+        """边界测试：空的 instruction 被接受（在 context_ready 中返回）。"""
+        result = await self.engine.run(
+            instruction="",
+            locate_result=LOCATE_RESULT_DICT,
+        )
+        # 空指令被接受，返回 context_ready 状态但指令为空字符串
+        assert result["status"] == "context_ready"
+        assert result["instruction"] == ""
+        assert "current_code" in result
+        assert len(result["current_code"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_boundary_locate_and_file_paths_both_empty(self):
+        """边界测试：locate_result 和 file_paths 都为空应返回错误。"""
+        result = await self.engine.run(
+            instruction="修改某些代码",
+            locate_result=None,
+            file_paths=None,
+        )
+        assert result["status"] == "error"
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_boundary_invalid_repo_path(self):
+        """边界测试：无效的 repo_path 应返回错误。"""
+        engine = CodegenEngine(repo_path="/nonexistent/repo/path/12345")
+        result = await engine.run(
+            instruction="修改代码",
+            locate_result=LOCATE_RESULT_DICT,
+        )
+        assert result["status"] == "error"
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_boundary_large_file_1000_lines(self) -> None:
+        """边界测试：包含 >1000 行文件的代码上下文生成。"""
+        # 创建一个 >1000 行的文件
+        large_file = self.work_dir / "large_module.py"
+        lines: list[str] = ['"""Large test file."""\n']
+        for i in range(1, 1100):
+            lines.append(f"def func_{i}() -> int:\n")
+            lines.append(f'    """Function {i}."""\n')
+            lines.append(f"    return {i}\n")
+            lines.append("\n")
+        large_file.write_text("".join(lines))
+
+        # 创建定位结果指向这个大文件
+        locate = {
+            "matched_modules": "Large test module",
+            "call_chain": "```mermaid\ngraph TD\n    A[Large Module]\n```",
+            "exact_locations": [
+                {
+                    "file": "large_module.py",
+                    "line": 500,
+                    "why_it_matters": "Middle of large file",
+                    "certainty": "确定",
+                }
+            ],
+            "diagnosis": "Need to update large file",
+        }
+
+        result = await self.engine.run(
+            instruction="在大文件中添加一个新函数",
+            locate_result=locate,
+        )
+
+        # 验证返回结构有效（不会因为文件大而崩溃）
+        assert "status" in result
+        assert result["status"] in ("context_ready", "error")
+        if result["status"] == "context_ready":
+            assert "current_code" in result
+            assert "large_module.py" in result["current_code"]
+            # 验证大文件被正确加载并加行号
+            code_with_numbers = result["current_code"]["large_module.py"]
+            assert "|" in code_with_numbers
+            assert len(code_with_numbers.splitlines()) > 1000
+
+    @pytest.mark.asyncio
+    async def test_boundary_instruction_presence_verified(self) -> None:
+        """边界测试：验证 instruction 字段在返回中保留。"""
+        test_instruction = "修改注册流程中的文案"
+        result = await self.engine.run(
+            instruction=test_instruction,
+            locate_result=LOCATE_RESULT_DICT,
+        )
+
+        # instruction 字段必须存在且内容正确
+        assert "instruction" in result
+        assert result["instruction"] == test_instruction
+        assert result["status"] == "context_ready"
 
 
 if __name__ == "__main__":

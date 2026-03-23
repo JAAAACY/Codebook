@@ -6,7 +6,9 @@
 3. 上下游 1 跳模块的 L3 摘要（高优先级）
 4. 该模块已有的诊断结果（高优先级）
 5. 其他用户对该模块的批注（如有）
-6. 上下游 2 跳模块的 L3 摘要（低优先级，空间不够可省略）
+6. 该模块的 QA 历史摘要（中优先级）
+7. 相关热点信息（中优先级）
+8. 上下游 2 跳模块的 L3 摘要（低优先级，空间不够可省略）
 """
 
 from __future__ import annotations
@@ -20,9 +22,10 @@ from typing import Any
 import structlog
 
 from src.config import settings
-from src.summarizer.engine import SummaryContext, generate_local_chapter
+from src.summarizer.engine import SummaryContext, generate_local_chapter, _normalize_role
 from src.parsers.module_grouper import ModuleGroup
 from src.tools._repo_cache import repo_cache
+from src.memory.project_memory import ProjectMemory
 
 logger = structlog.get_logger()
 
@@ -36,25 +39,39 @@ MAX_CONTEXT_CHARS = 60_000  # ≈ 30k tokens 的上下文预算
 RESERVED_FOR_RESPONSE = 8_000  # 留给 LLM 回答的 token 数
 
 ROLE_CONFIG = {
+    "dev": {
+        "name": "开发者",
+        "language_style": "开发者视角、关注代码逻辑和技术细节，用完整的技术语言",
+        "banned_terms": "",
+    },
+    "pm": {
+        "name": "产品经理",
+        "language_style": "产品视角、关注用户体验和功能逻辑，用清晰的业务语言",
+        "banned_terms": "幂等、slug、冷启动、连接池、openapi、env_file、中间件、布尔值、回调、异步、序列化、AST、NetworkX、Tree-sitter",
+    },
+    "domain_expert": {
+        "name": "行业专家",
+        "language_style": "行业专家视角、用该领域的专业术语翻译代码逻辑，关注业务规则验证和合规性",
+        "banned_terms": "",
+    },
+    # 向后兼容：旧角色名映射到新视图
     "ceo": {
         "name": "CEO / 创始人",
         "language_style": "高管视角、关注商业影响和战略风险，用简洁的业务语言",
         "banned_terms": "API、SDK、ORM、中间件、回调、异步、序列化、布尔值、连接池、冷启动",
-    },
-    "pm": {
-        "name": "产品经理",
-        "language_style": "产品视角、关注用户体验和功能逻辑，用清晰的产品语言",
-        "banned_terms": "幂等、slug、冷启动、连接池、openapi、env_file、中间件、布尔值、回调、异步、序列化",
+        "_mapped_to": "pm",
     },
     "investor": {
         "name": "投资人",
         "language_style": "投资视角、关注技术壁垒、可扩展性和风险，用商业+技术概览语言",
         "banned_terms": "slug、env_file、中间件、序列化、回调",
+        "_mapped_to": "pm",
     },
     "qa": {
         "name": "QA / 测试工程师",
         "language_style": "质量视角、关注边界条件、错误处理和测试覆盖，可以适度使用技术术语",
-        "banned_terms": "（QA 角色可使用技术术语）",
+        "banned_terms": "",
+        "_mapped_to": "dev",
     },
 }
 
@@ -85,25 +102,6 @@ class DiagnosisCache:
 
 # 全局单例
 diagnosis_cache = DiagnosisCache()
-
-
-# ───────────────────────────────────────────
-# LLM 调用（复用 codegen_engine 的模式）
-# ───────────────────────────────────────────
-
-class _AskAboutLLMCaller:
-    """兼容层：保留类接口供测试使用，但实际运行时不再调用外部 LLM。
-
-    MCP 架构下，ask_about 不再自行调用 Anthropic API，
-    而是将组装好的上下文返回给 MCP 宿主（Claude Desktop），由宿主 LLM 直接推理。
-    """
-
-    async def call(self, messages: list[dict[str, str]]) -> str:
-        # 不再调用外部 API — 这条路径仅供向后兼容的测试使用
-        raise NotImplementedError(
-            "MCP 架构下不再需要内部 LLM 调用。"
-            "ask_about 现在直接返回上下文，由 MCP 宿主推理。"
-        )
 
 
 # ───────────────────────────────────────────
@@ -330,12 +328,69 @@ def _build_annotation_context(module_name: str) -> str:
     return "\n".join(parts)
 
 
+def _build_qa_history_context(memory: ProjectMemory, module_name: str) -> str:
+    """构建该模块的 QA 历史摘要（优先级 6）。"""
+    try:
+        understanding = memory.get_module_understanding(module_name)
+        if not understanding or not understanding.qa_history:
+            return ""
+
+        parts = ["## 历史问题与回答\n"]
+        for qa in understanding.qa_history[-3:]:  # 最近 3 条
+            parts.append(f"### 问题：{qa.question}")
+            parts.append(f"- 回答摘要：{qa.answer_summary}")
+            parts.append(f"- 置信度：{qa.confidence:.1%}")
+            if qa.follow_ups_used:
+                parts.append(f"- 后续追问方向：{', '.join(qa.follow_ups_used[:2])}")
+            parts.append("")
+
+        return "\n".join(parts)
+    except Exception as e:
+        logger.debug("qa_history_context_failed", error=str(e))
+        return ""
+
+
+def _build_hotspot_context(memory: ProjectMemory, module_name: str) -> str:
+    """构建该模块的热点信息（优先级 7）。"""
+    try:
+        hotspots = memory.get_hotspots(module_name)
+        if not hotspots:
+            return ""
+
+        parts = ["## 已知知识热点\n"]
+        for hotspot in hotspots[:3]:  # 最多 3 个热点
+            parts.append(f"### {hotspot.topic}")
+            parts.append(f"- 相关问题数：{hotspot.question_count}")
+            if hotspot.typical_questions:
+                parts.append(f"- 代表性问题：")
+                for q in hotspot.typical_questions[:2]:
+                    parts.append(f"  - {q}")
+            if hotspot.suggested_doc:
+                parts.append(f"- 建议补充文档：{hotspot.suggested_doc[:100]}")
+            parts.append("")
+
+        return "\n".join(parts)
+    except Exception as e:
+        logger.debug("hotspot_context_failed", error=str(e))
+        return ""
+
+
 def assemble_context(
     ctx: SummaryContext,
     module: ModuleGroup,
     repo_path: str,
 ) -> tuple[str, list[str]]:
     """按优先级组装上下文，直到接近 token 上限。
+
+    优先级：
+    1. 目标模块 L3 摘要（必选）
+    2. 目标模块源代码（必选）
+    3. 上下游 1 跳模块的 L3 摘要（高优先级）
+    4. 诊断结果（高优先级）
+    5. 用户批注（高优先级）
+    6. QA 历史摘要（中优先级）
+    7. 热点信息（中优先级）
+    8. 上下游 2 跳模块的 L3 摘要（低优先级）
 
     Returns:
         (context_text, modules_used_list)
@@ -353,6 +408,15 @@ def assemble_context(
         parts.append(text)
         budget -= cost
         return True
+
+    # Initialize ProjectMemory if repo_url available
+    memory = None
+    try:
+        repo_url = getattr(ctx.clone_result, "repo_url", None) or ""
+        if repo_url:
+            memory = ProjectMemory(repo_url)
+    except Exception as e:
+        logger.debug("memory_initialization_failed", error=str(e))
 
     # ── 优先级 1：目标模块 L3 摘要（必选）──
     l3_summary = _build_module_l3_summary(ctx, module.name)
@@ -374,16 +438,48 @@ def assemble_context(
             break
 
     # ── 优先级 4：该模块已有的诊断结果（高优先级）──
-    diag_text = _build_diagnosis_context(module.name)
+    # Try ProjectMemory first, fall back to DiagnosisCache
+    diag_text = ""
+    if memory:
+        try:
+            understanding = memory.get_module_understanding(module.name)
+            if understanding and understanding.diagnoses:
+                diag_parts = ["## 已有诊断结果\n"]
+                for i, diag in enumerate(understanding.diagnoses[-3:], 1):
+                    diag_parts.append(f"### 诊断 {i}")
+                    diag_parts.append(f"- 问题：{diag.query}")
+                    diag_parts.append(f"- 结论：{diag.diagnosis_summary}")
+                    if diag.matched_locations:
+                        diag_parts.append(f"- 定位：{', '.join(diag.matched_locations[:3])}")
+                    diag_parts.append("")
+                diag_text = "\n".join(diag_parts)
+        except Exception as e:
+            logger.debug("diagnosis_from_memory_failed", error=str(e))
+
+    if not diag_text:
+        diag_text = _build_diagnosis_context(module.name)
+
     if diag_text:
         _try_append(diag_text, "diagnoses")
 
-    # ── 优先级 5：用户批注（如有）──
+    # ── 优先级 5：用户批注（高优先级）──
     ann_text = _build_annotation_context(module.name)
     if ann_text:
         _try_append(ann_text, "annotations")
 
-    # ── 优先级 6：上下游 2 跳模块的 L3 摘要（低优先级）──
+    # ── 优先级 6：QA 历史摘要（中优先级）──
+    if memory:
+        qa_text = _build_qa_history_context(memory, module.name)
+        if qa_text:
+            _try_append(qa_text, "qa_history")
+
+    # ── 优先级 7：热点信息（中优先级）──
+    if memory:
+        hotspot_text = _build_hotspot_context(memory, module.name)
+        if hotspot_text:
+            _try_append(hotspot_text, "hotspots")
+
+    # ── 优先级 8：上下游 2 跳模块的 L3 摘要（低优先级）──
     up_2hop, down_2hop = _get_neighbor_modules(ctx, module, hops=2)
     # 去掉已经包含的 1 跳
     already = set(modules_used)
@@ -405,14 +501,21 @@ def assemble_context(
 
 def _build_system_prompt(role: str) -> str:
     """根据角色构建 system prompt。"""
-    cfg = ROLE_CONFIG.get(role, ROLE_CONFIG["pm"])
+    # 规范化角色名（处理向后兼容性）
+    normalized_role = _normalize_role(role)
+
+    cfg = ROLE_CONFIG.get(normalized_role, ROLE_CONFIG["pm"])
     role_name = cfg["name"]
     language_style = cfg["language_style"]
     banned_terms = cfg["banned_terms"]
 
+    prompt_intro = f"你是 CodeBook 的 AI 助手，正在帮助{role_name}理解代码。\n用{language_style}回答。"
+
+    if banned_terms:
+        prompt_intro += f"\n禁止在主回答中使用以下术语：{banned_terms}。"
+
     return textwrap.dedent(f"""\
-你是 CodeBook 的 AI 助手，正在帮助{role_name}理解代码。
-用{language_style}回答。禁止在主回答中使用以下术语：{banned_terms}。
+{prompt_intro}
 
 ## 回答规则
 

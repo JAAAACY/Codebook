@@ -3,6 +3,8 @@
 import asyncio
 import os
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,7 +58,7 @@ EXTENSION_TO_LANGUAGE = {
     ".go": "go",
     ".rs": "rust",
     ".cpp": "cpp", ".c": "cpp", ".h": "cpp", ".hpp": "cpp",
-    ".cs": "c_sharp",
+    ".cs": "csharp",
     ".rb": "ruby",
     ".php": "php",
     ".swift": "swift",
@@ -109,62 +111,283 @@ def _count_lines(file_path: str) -> int:
         return 0
 
 
-def _scan_files(repo_path: str) -> tuple[list[FileInfo], int]:
-    """扫描仓库目录，返回文件列表和跳过文件数。"""
+def _scan_directory(dirpath: str, repo_path: str, max_files: int = 5000) -> tuple[list[FileInfo], int, bool]:
+    """扫描单个目录，返回文件列表、跳过计数和是否超过限制。
+
+    Args:
+        dirpath: 目录路径
+        repo_path: 仓库根路径
+        max_files: 最大文件数限制（达到后停止扫描）
+
+    Returns:
+        (文件列表, 跳过数, 是否超出限制)
+    """
     files: list[FileInfo] = []
     skipped = 0
-    repo_root = Path(repo_path)
 
-    for dirpath, dirnames, filenames in os.walk(repo_path):
-        # 原地修改 dirnames 以跳过排除目录
-        dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
+    try:
+        entries = os.listdir(dirpath)
+    except (OSError, PermissionError):
+        return [], 0, False
 
-        for fname in filenames:
-            # 排除特定文件名
-            if fname in EXCLUDED_FILES:
-                skipped += 1
-                continue
+    for entry in entries:
+        abs_entry = os.path.join(dirpath, entry)
 
-            ext = Path(fname).suffix.lower()
+        # 跳过排除目录
+        if os.path.isdir(abs_entry) and _should_skip_dir(entry):
+            continue
 
-            # 排除特定扩展名
-            if ext in EXCLUDED_EXTENSIONS:
-                skipped += 1
-                continue
+        if not os.path.isfile(abs_entry):
+            continue
 
-            abs_path = os.path.join(dirpath, fname)
-            rel_path = os.path.relpath(abs_path, repo_path)
+        # 排除特定文件名
+        if entry in EXCLUDED_FILES:
+            skipped += 1
+            continue
 
-            # 判断是代码还是配置
-            is_config = ext in CONFIG_EXTENSIONS
-            is_code = ext in CODE_EXTENSIONS
+        ext = Path(entry).suffix.lower()
 
-            if not is_code and not is_config:
-                skipped += 1
-                continue
+        # 排除特定扩展名
+        if ext in EXCLUDED_EXTENSIONS:
+            skipped += 1
+            continue
 
-            language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
-            size_bytes = os.path.getsize(abs_path)
-            line_count = _count_lines(abs_path)
+        rel_path = os.path.relpath(abs_entry, repo_path)
 
-            files.append(FileInfo(
-                path=rel_path,
-                abs_path=abs_path,
-                language=language,
-                size_bytes=size_bytes,
-                line_count=line_count,
-                is_config=is_config,
-            ))
+        # 判断是代码还是配置
+        is_config = ext in CONFIG_EXTENSIONS
+        is_code = ext in CODE_EXTENSIONS
 
-    return files, skipped
+        if not is_code and not is_config:
+            skipped += 1
+            continue
+
+        language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
+        try:
+            size_bytes = os.path.getsize(abs_entry)
+            line_count = _count_lines(abs_entry)
+        except (OSError, PermissionError):
+            skipped += 1
+            continue
+
+        files.append(FileInfo(
+            path=rel_path,
+            abs_path=abs_entry,
+            language=language,
+            size_bytes=size_bytes,
+            line_count=line_count,
+            is_config=is_config,
+        ))
+
+        if len(files) >= max_files:
+            return files, skipped, True
+
+    return files, skipped, False
 
 
-async def clone_repo(url: str, target_dir: str | None = None) -> CloneResult:
+def _scan_files_parallel(repo_path: str, max_files: int = 5000) -> tuple[list[FileInfo], int]:
+    """使用并行遍历扫描仓库目录（针对大型仓库优化）。
+
+    Args:
+        repo_path: 仓库路径
+        max_files: 最大扫描文件数（在 overview 模式下限制为 5000 以避免超时）
+
+    Returns:
+        (文件列表, 跳过文件数)
+    """
+    all_files: list[FileInfo] = []
+    total_skipped = 0
+    hit_limit = False
+
+    # 线程安全的锁，用于保护共享列表
+    files_lock = threading.Lock()
+
+    # 收集所有顶级目录（排除大型目录如 node_modules, .git）
+    try:
+        entries = os.listdir(repo_path)
+    except (OSError, PermissionError):
+        logger.warning("scan_files.permission_denied", path=repo_path)
+        return [], 0
+
+    dirs_to_scan = []
+    for entry in entries:
+        abs_entry = os.path.join(repo_path, entry)
+        if os.path.isdir(abs_entry) and not _should_skip_dir(entry):
+            dirs_to_scan.append(abs_entry)
+
+    # 添加仓库根目录本身
+    dirs_to_scan.insert(0, repo_path)
+
+    def scan_with_recursion(dirpath: str) -> tuple[list[FileInfo], int]:
+        """递归扫描目录树（使用 os.walk，但对每层目录进行并行处理）。"""
+        local_files: list[FileInfo] = []
+        local_skipped = 0
+
+        for root, dirnames, filenames in os.walk(dirpath):
+            # 原地修改 dirnames 以跳过排除目录
+            dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
+
+            # 处理该目录中的文件
+            for fname in filenames:
+                if len(local_files) >= max_files:
+                    return local_files, local_skipped
+
+                # 排除特定文件名
+                if fname in EXCLUDED_FILES:
+                    local_skipped += 1
+                    continue
+
+                ext = Path(fname).suffix.lower()
+
+                # 排除特定扩展名
+                if ext in EXCLUDED_EXTENSIONS:
+                    local_skipped += 1
+                    continue
+
+                abs_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(abs_path, repo_path)
+
+                # 判断是代码还是配置
+                is_config = ext in CONFIG_EXTENSIONS
+                is_code = ext in CODE_EXTENSIONS
+
+                if not is_code and not is_config:
+                    local_skipped += 1
+                    continue
+
+                try:
+                    language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
+                    size_bytes = os.path.getsize(abs_path)
+                    line_count = _count_lines(abs_path)
+
+                    local_files.append(FileInfo(
+                        path=rel_path,
+                        abs_path=abs_path,
+                        language=language,
+                        size_bytes=size_bytes,
+                        line_count=line_count,
+                        is_config=is_config,
+                    ))
+                except (OSError, PermissionError):
+                    local_skipped += 1
+                    continue
+
+        return local_files, local_skipped
+
+    # 使用线程池加速大型目录的遍历
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(scan_with_recursion, dirpath): dirpath for dirpath in dirs_to_scan}
+
+        for future in as_completed(futures):
+            if hit_limit:
+                break
+
+            try:
+                files, skipped = future.result()
+                with files_lock:
+                    all_files.extend(files)
+                    total_skipped += skipped
+                    if len(all_files) >= max_files:
+                        hit_limit = True
+                        all_files = all_files[:max_files]
+            except Exception as e:
+                logger.warning("scan_files.thread_error", error=str(e))
+
+    return all_files, total_skipped
+
+
+def _scan_files(repo_path: str, max_files: int = 5000) -> tuple[list[FileInfo], int]:
+    """扫描仓库目录，返回文件列表和跳过文件数。
+
+    针对小型仓库（<5k files）使用单线程 os.walk；
+    针对大型仓库使用并行扫描加速。
+
+    Args:
+        repo_path: 仓库路径
+        max_files: 最大扫描文件数（overview 模式下限制）
+
+    Returns:
+        (文件列表, 跳过文件数)
+    """
+    # 首先估算文件数，快速决定是否需要并行处理
+    try:
+        # 快速估计：统计顶级目录数和排除情况
+        entries = os.listdir(repo_path)
+        excluded_count = sum(1 for e in entries if _should_skip_dir(e) and os.path.isdir(os.path.join(repo_path, e)))
+        non_excluded_dirs = sum(1 for e in entries if not _should_skip_dir(e) and os.path.isdir(os.path.join(repo_path, e)))
+    except (OSError, PermissionError):
+        logger.warning("scan_files.cannot_estimate", path=repo_path)
+        non_excluded_dirs = 1
+
+    # 如果非排除目录数 > 4 个，使用并行扫描；否则使用标准 os.walk
+    # 这是启发式判断：大型项目通常有多个顶级目录
+    if non_excluded_dirs > 4:
+        logger.info("scan_files.using_parallel", dirs_count=non_excluded_dirs)
+        return _scan_files_parallel(repo_path, max_files)
+    else:
+        # 标准单线程扫描
+        logger.info("scan_files.using_sequential", dirs_count=non_excluded_dirs)
+        files: list[FileInfo] = []
+        skipped = 0
+
+        for dirpath, dirnames, filenames in os.walk(repo_path):
+            # 原地修改 dirnames 以跳过排除目录
+            dirnames[:] = [d for d in dirnames if not _should_skip_dir(d)]
+
+            for fname in filenames:
+                if len(files) >= max_files:
+                    return files, skipped
+
+                # 排除特定文件名
+                if fname in EXCLUDED_FILES:
+                    skipped += 1
+                    continue
+
+                ext = Path(fname).suffix.lower()
+
+                # 排除特定扩展名
+                if ext in EXCLUDED_EXTENSIONS:
+                    skipped += 1
+                    continue
+
+                abs_path = os.path.join(dirpath, fname)
+                rel_path = os.path.relpath(abs_path, repo_path)
+
+                # 判断是代码还是配置
+                is_config = ext in CONFIG_EXTENSIONS
+                is_code = ext in CODE_EXTENSIONS
+
+                if not is_code and not is_config:
+                    skipped += 1
+                    continue
+
+                try:
+                    language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
+                    size_bytes = os.path.getsize(abs_path)
+                    line_count = _count_lines(abs_path)
+
+                    files.append(FileInfo(
+                        path=rel_path,
+                        abs_path=abs_path,
+                        language=language,
+                        size_bytes=size_bytes,
+                        line_count=line_count,
+                        is_config=is_config,
+                    ))
+                except (OSError, PermissionError):
+                    skipped += 1
+                    continue
+
+        return files, skipped
+
+
+async def clone_repo(url: str, target_dir: str | None = None, max_files: int = 5000) -> CloneResult:
     """克隆 Git 仓库，过滤非代码文件。
 
     Args:
         url: Git 仓库地址（HTTPS 格式）或本地目录路径。
         target_dir: 克隆目标目录。为 None 时使用临时目录。
+        max_files: 最大扫描文件数（overview 模式下限制扫描范围）。默认 5000。
 
     Returns:
         CloneResult 包含文件列表、语言统计、总行数。
@@ -195,7 +418,7 @@ async def clone_repo(url: str, target_dir: str | None = None) -> CloneResult:
         logger.info("clone_repo.done", path=repo_path)
 
     # 扫描文件
-    files, skipped = _scan_files(repo_path)
+    files, skipped = _scan_files(repo_path, max_files=max_files)
 
     # 语言统计
     languages: dict[str, int] = {}

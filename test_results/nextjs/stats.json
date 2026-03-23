@@ -1,0 +1,15 @@
+{
+  "project": "nextjs",
+  "repo_url": "https://github.com/vercel/next.js",
+  "clone_date": "2026-03-23",
+  "file_count": 28056,
+  "code_lines": 144014,
+  "languages": {
+    "JavaScript": 10097,
+    "TypeScript": 4665,
+    "TSX": 5564,
+    "JSON": 1480,
+    "Markdown": 477,
+    "Python": 1
+  }
+}
