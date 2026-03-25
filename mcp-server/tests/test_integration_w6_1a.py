@@ -42,14 +42,16 @@ RESULTS_DIR = PROJECT_ROOT / "test_results"
 # Skip condition for tests requiring the FastAPI repo fixture
 # Check both that the directory exists AND that it's a valid git repo (has .git/)
 def _is_valid_fastapi_repo() -> bool:
-    """Check if FastAPI repo directory exists and is a valid git repository."""
+    """Check if FastAPI repo directory exists and is a valid git repository.
+
+    Requires .git directory because scan_repo uses `git clone` on local paths,
+    which fails without a valid git repo. Having only pyproject.toml (e.g. from
+    a zip download) is NOT sufficient.
+    """
     if not FASTAPI_REPO_DIR.is_dir():
         return False
-    # Also check for .git directory or at least a setup.py/pyproject.toml
-    # to avoid false positives from empty or partially-cloned directories
-    has_git = (FASTAPI_REPO_DIR / ".git").exists()
-    has_setup = (FASTAPI_REPO_DIR / "setup.py").exists() or (FASTAPI_REPO_DIR / "pyproject.toml").exists()
-    return has_git or has_setup
+    # Must have .git — scan_repo does `git clone <local_path>` which requires it
+    return (FASTAPI_REPO_DIR / ".git").exists()
 
 skip_if_no_fastapi_repo = pytest.mark.skipif(
     not _is_valid_fastapi_repo(),

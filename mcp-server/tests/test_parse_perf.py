@@ -25,11 +25,27 @@ from src.parsers.ast_parser import (
 )
 
 
+def _tree_sitter_available() -> bool:
+    """Check if tree-sitter-language-pack is installed and functional."""
+    try:
+        import tree_sitter_language_pack  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+skip_if_no_tree_sitter = pytest.mark.skipif(
+    not _tree_sitter_available(),
+    reason="tree-sitter-language-pack not installed",
+)
+
+
 # ══════════════════════════════════════════════════════════
 # 第一步：Bash grammar 测试
 # ══════════════════════════════════════════════════════════
 
 
+@skip_if_no_tree_sitter
 class TestBashGrammar:
     """验证 bash 脚本能通过 tree-sitter 正确解析。"""
 
@@ -205,6 +221,7 @@ export default App;
             is_config=False,
         )
 
+    @skip_if_no_tree_sitter
     async def test_cjs_native_parse(self, cjs_file: FileInfo):
         """验证 .cjs 文件走 tree-sitter native 解析。"""
         _health_check.reset()
@@ -216,6 +233,7 @@ export default App;
         func_names = [f.name for f in result.functions]
         assert "startServer" in func_names
 
+    @skip_if_no_tree_sitter
     async def test_mjs_native_parse(self, mjs_file: FileInfo):
         """验证 .mjs 文件走 tree-sitter native 解析。"""
         _health_check.reset()
@@ -226,6 +244,7 @@ export default App;
         func_names = [f.name for f in result.functions]
         assert "loadConfig" in func_names
 
+    @skip_if_no_tree_sitter
     async def test_tsx_native_parse(self, tsx_file: FileInfo):
         """验证 .tsx 文件走 tree-sitter native 解析。"""
         _health_check.reset()
@@ -442,10 +461,16 @@ class Class_{i}:
         assert len(results) == 4
 
         result_by_path = {r.file_path: r for r in results}
-        # Python uses native ast extractor (M2)
+        # Python uses native ast extractor (M2) — always available
         assert result_by_path["app.py"].parse_method in ("full", "native_ast", "native")
-        # JS / TS / Bash should use tree-sitter
-        for path in ["app.js", "run.sh", "app.ts"]:
-            assert result_by_path[path].parse_method == "full", \
-                f"{path}: expected 'full', got {result_by_path[path].parse_method}, " \
-                f"reason: {result_by_path[path].fallback_reason}"
+        # JS / TS / Bash require tree-sitter; if unavailable they fall back to regex
+        if _tree_sitter_available():
+            for path in ["app.js", "run.sh", "app.ts"]:
+                assert result_by_path[path].parse_method == "full", \
+                    f"{path}: expected 'full', got {result_by_path[path].parse_method}, " \
+                    f"reason: {result_by_path[path].fallback_reason}"
+        else:
+            # Without tree-sitter, non-Python files use regex fallback
+            for path in ["app.js", "run.sh", "app.ts"]:
+                assert result_by_path[path].parse_method in ("full", "partial", "basic", "regex"), \
+                    f"{path}: unexpected method {result_by_path[path].parse_method}"
