@@ -239,19 +239,9 @@ CodeBook uses a two-tier parsing strategy to ensure reliability:
 
 Each parsed file includes a `parse_method` field (`full` / `partial` / `basic` / `failed`) so downstream tools and users know the precision level. When more than 50% of files use simplified parsing, scan results include a warning.
 
-**To install with full tree-sitter support:**
+`tree-sitter-language-pack` is a **core dependency** and will be installed automatically with `pip install -e .` or `pip install codebook-mcp`. After installation, run `codebook doctor` to verify all language parsers are available.
 
-```bash
-pip install -e ".[full]"
-```
-
-**Without tree-sitter (regex-only mode):**
-
-```bash
-pip install -e .
-```
-
-The system never crashes due to missing parsers — it always produces usable results at the best available precision level.
+If tree-sitter is missing or a specific language grammar fails to load at runtime, the system automatically falls back to regex extraction — it never crashes, and always produces usable results at the best available precision level.
 
 ## Testing
 

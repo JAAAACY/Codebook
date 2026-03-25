@@ -378,6 +378,55 @@ def _write_config(target: "ToolTarget", data: dict):
 
 # ── 核心命令 ──────────────────────────────────────────
 
+def _verify_tree_sitter():
+    """安装后验证 tree-sitter 解析能力，检测降级风险。"""
+    print()
+    print(f"  🔍 验证解析引擎")
+    print(f"  {'─' * 40}")
+
+    try:
+        import tree_sitter_language_pack as tslp
+    except ImportError:
+        print(f"  ✗ tree-sitter-language-pack 未安装")
+        print(f"    当前将使用正则 fallback（置信度 ≤0.7）")
+        print(f"    修复: pip install tree-sitter-language-pack")
+        print(f"  {'─' * 40}")
+        return False
+
+    # 逐语言探测
+    test_languages = {
+        "python":     b"def hello(): pass",
+        "javascript": b"function hello() {}",
+        "typescript":  b"function hello(): void {}",
+        "bash":       b"function hello() { echo hi; }",
+        "go":         b"package main\nfunc hello() {}",
+        "rust":       b"fn hello() {}",
+        "java":       b"class A { void hello() {} }",
+    }
+    ok_count = 0
+    fail_langs = []
+
+    for lang, probe_code in test_languages.items():
+        try:
+            parser = tslp.get_parser(lang)
+            tree = parser.parse(probe_code)
+            if tree.root_node is not None:
+                ok_count += 1
+            else:
+                fail_langs.append(lang)
+        except Exception:
+            fail_langs.append(lang)
+
+    if not fail_langs:
+        print(f"  ✓ tree-sitter 全部 {ok_count} 种语言可用（置信度 1.0）")
+    else:
+        print(f"  ✓ tree-sitter {ok_count}/{len(test_languages)} 种语言可用")
+        print(f"  ⚠ 以下语言将使用正则 fallback: {', '.join(fail_langs)}")
+
+    print(f"  {'─' * 40}")
+    return len(fail_langs) == 0
+
+
 def _install(target_filter: str | None = None):
     """安装 CodeBook MCP Server 到 AI 工具。"""
     mcp_config = _build_mcp_config()
@@ -426,6 +475,9 @@ def _install(target_filter: str | None = None):
     if skipped_count:
         print(f"  ◻ 跳过 {skipped_count} 个未安装的工具")
     print()
+    # ── 安装后自动验证 tree-sitter 可用性 ──
+    _verify_tree_sitter()
+
     print(f"  📋 下一步: 重启已配置的 AI 工具即可使用 CodeBook")
     print(f"  💡 验证: 在对话中输入 \"用 scan_repo 扫描一个 GitHub 项目\"")
     print()

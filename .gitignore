@@ -26,4 +26,42 @@ pytest-cache-files-*/
 # Cloned repos (large, should not be committed)
 repos/
 .~lock.*
+
+# ── 非核心文件（本地保留，不进 git）──────────────
+
+# 规划文档 & 产品文档（.docx / .xlsx / .html）
+CodeBook_*.docx
+CodeBook_*.xlsx
+CodeBook_安装指南.md
+ShipSwift-*.html
+files.zip
+
+# 开发日志 & 外部参考
+DEV_LOG.md
+conduit.md
+
+# 测试脚本 & 测试产物
 run_a2_*.py
+test_results/
+mcp-server/test_results/
+
+# 任务调度 & 日志
+codebook-tasks/
+
+# 原型 & 生成产物
+generated/
+locate/
+locate-demo-output.md
+prototype/
+scripts/
+
+# 旧版 prompt 配置
+prompts/
+
+# 验收报告
+mcp-server-acceptance-report.md
+docs/acceptance_*.md
+docs/quality_eval*.md
+docs/sprint*_report.md
+docs/role_system_*.md
+docs/self_evolution_*.md

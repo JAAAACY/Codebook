@@ -1,2 +1,0 @@
-Starting nextjs at 16:13:20
-[16:13:20] Starting scan_repo (overview, timeout=900s)

@@ -1,6 +1,0 @@
-{
-  "status": "timeout",
-  "timeout_seconds": 1200,
-  "reason": "Super-large repository (10k TS files, 600k lines) - scan stalled during directory scanning phase",
-  "note": "VS Code has 10,144 source files and 2.2M+ lines total. The file enumeration and parsing steps are I/O bound. Without caching optimizations or parallel processing, a single-threaded scan exceeds practical timeouts."
-}

@@ -56,10 +56,21 @@ def _try_import_tree_sitter():
             pass
 
     # 第三次尝试：搜索常见安装路径
+    # MCP server 可能在容器、venv、或 Claude Desktop 拉起的隔离进程中运行，
+    # sys.path 不一定覆盖 pip install --user 的目标目录。
     import glob as glob_mod
+    py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
     for pattern in [
-        "/sessions/*/.*local/lib/python*/site-packages",
+        # 用户级 site-packages（含隐藏目录变体）
+        os.path.expanduser(f"~/.local/lib/{py_ver}/site-packages"),
         os.path.expanduser("~/.local/lib/python*/site-packages"),
+        # Cowork / MCP sandbox 常见路径
+        f"/sessions/*/.local/lib/{py_ver}/site-packages",
+        "/sessions/*/.*local/lib/python*/site-packages",
+        # virtualenv / venv 常见布局
+        os.path.expanduser(f"~/*/lib/{py_ver}/site-packages"),
+        # pip install --target 的常见自定义路径
+        os.path.expanduser("~/.codebook/lib/python*/site-packages"),
     ]:
         for path in glob_mod.glob(pattern):
             if path not in sys.path:
