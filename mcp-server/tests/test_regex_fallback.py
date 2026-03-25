@@ -563,12 +563,11 @@ class TestParseFileFallback:
 
     @patch("src.parsers.native_extractors.python_ast.PythonAstExtractor.extract_all",
            side_effect=SyntaxError("mock syntax error"))
-    @patch("src.parsers.ast_parser._tree_sitter_module")
     @patch("src.parsers.ast_parser._health_check")
-    async def test_fallback_chain_native_to_treesitter_to_regex(self, mock_hc, mock_ts, mock_native, python_file):
+    async def test_fallback_chain_native_to_treesitter_to_regex(self, mock_hc, mock_native, python_file):
         """native ast 失败 → tree-sitter 失败 → 正则 fallback。"""
         mock_hc.is_available.return_value = True
-        mock_ts.get_parser.side_effect = RuntimeError("parser crash")
+        mock_hc.get_parser.side_effect = RuntimeError("parser crash")
         result = await parse_file(python_file)
         assert result.parse_method == "partial"
         assert "tree-sitter parse error" in result.fallback_reason

@@ -24,8 +24,57 @@ logger = structlog.get_logger()
 
 # ── Prompt 模板路径 ──────────────────────────────────────
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "prompts" / "summary"
-CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "prompts" / "codebook_config_v0.2.json"
+
+def _find_project_root() -> Path:
+    """定位 Codebook 项目根目录（包含 prompts/summary/ 目录的那层）。
+
+    搜索策略：
+    1. 从 __file__ 向上逐级查找含有 prompts/summary/ 子目录的目录
+    2. 从 CWD 向上查找
+    3. 回退到固定层级计算（兼容旧行为）
+
+    注意：mcp-server/src/prompts/ 是一个空的 Python 包目录（仅含 __init__.py），
+    不是真正的 prompt 模板目录。真正的模板在项目根的 prompts/summary/ 下。
+    """
+    def _is_valid_prompts_root(d: Path) -> bool:
+        """检查目录是否包含有效的 prompts 结构。"""
+        prompts = d / "prompts"
+        return (
+            prompts.is_dir()
+            and (
+                (prompts / "summary").is_dir()
+                or (prompts / "codebook_config_v0.3.json").is_file()
+                or (prompts / "codebook_config_v0.2.json").is_file()
+            )
+        )
+
+    # Strategy 1: search upward from __file__
+    current = Path(__file__).resolve().parent
+    for _ in range(8):
+        if _is_valid_prompts_root(current):
+            return current
+        parent = current.parent
+        if parent == current:  # reached filesystem root
+            break
+        current = parent
+
+    # Strategy 2: search upward from CWD (covers pytest invocation scenarios)
+    current = Path.cwd()
+    for _ in range(5):
+        if _is_valid_prompts_root(current):
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    # Strategy 3: original fixed-depth calculation
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+_PROJECT_ROOT = _find_project_root()
+PROMPTS_DIR = _PROJECT_ROOT / "prompts" / "summary"
+CONFIG_PATH = _PROJECT_ROOT / "prompts" / "codebook_config_v0.2.json"
 
 
 # ── 数据类 ──────────────────────────────────────────────
@@ -109,7 +158,7 @@ def _load_prompt_template(level: str) -> dict:
 def _load_codebook_config() -> dict:
     """加载 codebook_config_v0.3.json，回退到 v0.2。"""
     # Try v0.3 first
-    v0_3_path = Path(__file__).resolve().parent.parent.parent.parent / "prompts" / "codebook_config_v0.3.json"
+    v0_3_path = _PROJECT_ROOT / "prompts" / "codebook_config_v0.3.json"
     if v0_3_path.exists():
         with open(v0_3_path, "r", encoding="utf-8") as f:
             return json.load(f)

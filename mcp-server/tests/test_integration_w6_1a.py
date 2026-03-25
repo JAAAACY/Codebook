@@ -39,6 +39,13 @@ FASTAPI_REPO = str(FASTAPI_REPO_DIR.resolve())
 # Results directory
 RESULTS_DIR = PROJECT_ROOT / "test_results"
 
+# Skip condition for tests requiring the FastAPI repo fixture
+skip_if_no_fastapi_repo = pytest.mark.skipif(
+    not FASTAPI_REPO_DIR.is_dir(),
+    reason=f"FastAPI test repo not found at {FASTAPI_REPO_DIR}. "
+           f"Clone it with: git clone https://github.com/tiangolo/fastapi.git {FASTAPI_REPO_DIR}",
+)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_results_dir():
@@ -61,6 +68,7 @@ def cleanup_memory():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@skip_if_no_fastapi_repo
 class TestTerminologyFlywheelIntegration:
     """Test that terminology corrections integrate with role system."""
 
@@ -216,6 +224,7 @@ class TestTerminologyFlywheelIntegration:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@skip_if_no_fastapi_repo
 class TestProjectMemoryIntegration:
     """Test that diagnosis results integrate with project memory."""
 
@@ -378,6 +387,7 @@ class TestProjectMemoryIntegration:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@skip_if_no_fastapi_repo
 class TestIncrementalScanIntegration:
     """Test that scan_repo detects cached state and avoids re-parsing."""
 
@@ -459,6 +469,7 @@ class TestIncrementalScanIntegration:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@skip_if_no_fastapi_repo
 class TestHotspotVerification:
     """Test that hotspots are detected after multiple questions."""
 
@@ -546,6 +557,7 @@ class TestHotspotVerification:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@skip_if_no_fastapi_repo
 @pytest.mark.asyncio
 async def test_integration_summary(
     capsys,

@@ -102,10 +102,23 @@ class TreeSitterHealthCheck:
 
     _CACHE_TTL = 300  # 5 分钟缓存
 
+    # 语言名别名映射：tree-sitter-language-pack 与 tree-sitter-languages
+    # 可能使用不同的语言标识符
+    _LANG_ALIASES: dict[str, list[str]] = {
+        "bash": ["bash", "sh", "shell"],
+        "javascript": ["javascript", "js"],
+        "typescript": ["typescript", "tsx"],
+        "cpp": ["cpp", "c_plus_plus"],
+        "csharp": ["c_sharp", "csharp"],
+        "objc": ["objc", "objective_c", "objective-c"],
+    }
+
     def __init__(self):
         self._available: dict[str, bool] = {}
         self._global_available: bool | None = None
         self._last_check: float = 0
+        # 记录成功的语言名映射：internal_name -> actual_ts_name
+        self._resolved_names: dict[str, str] = {}
 
     def _check_global(self) -> bool:
         """检测 tree-sitter 模块是否整体可用。"""
@@ -123,6 +136,53 @@ class TreeSitterHealthCheck:
             logger.warning("tree_sitter.probe_failed", error=str(e))
             return False
 
+    def _try_get_parser(self, language: str):
+        """尝试获取 parser，支持别名回退。
+
+        Returns:
+            parser 对象，或 None（如果所有别名都失败）
+        """
+        # 如果已经有解析过的名称映射，直接用
+        if language in self._resolved_names:
+            return _tree_sitter_module.get_parser(self._resolved_names[language])
+
+        # 尝试原始名称
+        try:
+            parser = _tree_sitter_module.get_parser(language)
+            self._resolved_names[language] = language
+            return parser
+        except Exception:
+            pass
+
+        # 尝试别名
+        aliases = self._LANG_ALIASES.get(language, [])
+        for alias in aliases:
+            if alias == language:
+                continue  # 已经试过了
+            try:
+                parser = _tree_sitter_module.get_parser(alias)
+                self._resolved_names[language] = alias
+                logger.debug("tree_sitter.alias_resolved",
+                             language=language, alias=alias)
+                return parser
+            except Exception:
+                continue
+
+        return None
+
+    def get_parser(self, language: str):
+        """获取指定语言的 parser（带别名解析）。
+
+        外部代码应使用此方法代替直接调用 _tree_sitter_module.get_parser()。
+
+        Raises:
+            RuntimeError: 如果语言不可用
+        """
+        parser = self._try_get_parser(language)
+        if parser is None:
+            raise RuntimeError(f"tree-sitter parser not available for: {language}")
+        return parser
+
     def is_available(self, language: str | None = None) -> bool:
         """检查 tree-sitter 是否可用。
 
@@ -136,6 +196,7 @@ class TreeSitterHealthCheck:
             self._global_available = self._check_global()
             self._last_check = now
             self._available.clear()
+            self._resolved_names.clear()
             logger.info("tree_sitter.health_check",
                         available=self._global_available)
 
@@ -146,12 +207,12 @@ class TreeSitterHealthCheck:
             return True
 
         if language not in self._available:
-            try:
-                _tree_sitter_module.get_parser(language)
-                self._available[language] = True
-            except Exception:
-                self._available[language] = False
-                logger.debug("tree_sitter.lang_unavailable", language=language)
+            parser = self._try_get_parser(language)
+            self._available[language] = parser is not None
+            if not self._available[language]:
+                logger.debug("tree_sitter.lang_unavailable",
+                             language=language,
+                             aliases_tried=self._LANG_ALIASES.get(language, []))
 
         return self._available[language]
 
@@ -159,6 +220,7 @@ class TreeSitterHealthCheck:
         """重置缓存，强制下次重新检测。"""
         self._global_available = None
         self._available.clear()
+        self._resolved_names.clear()
         self._last_check = 0
 
 
@@ -853,7 +915,7 @@ async def parse_file(file: FileInfo) -> ParseResult:
 
     # 尝试 tree-sitter 解析（带超时保护）
     try:
-        parser = _tree_sitter_module.get_parser(file.language)
+        parser = _health_check.get_parser(file.language)
         tree = parser.parse(source)
     except Exception as e:
         # tree-sitter 失败，降级到正则
