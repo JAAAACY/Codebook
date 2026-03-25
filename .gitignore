@@ -55,8 +55,8 @@ locate-demo-output.md
 prototype/
 scripts/
 
-# 旧版 prompt 配置
-prompts/
+# prompts/ 目录包含 v0.3 配置和 L1-L4 模板，engine.py 和测试依赖它
+# prompts/
 
 # 验收报告
 mcp-server-acceptance-report.md

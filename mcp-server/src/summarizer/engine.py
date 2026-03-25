@@ -31,22 +31,26 @@ def _find_project_root() -> Path:
     搜索策略：
     1. 从 __file__ 向上逐级查找含有 prompts/summary/ 子目录的目录
     2. 从 CWD 向上查找
-    3. 回退到固定层级计算（兼容旧行为）
+    3. 从 CWD 的父目录查找（pytest 通常从 mcp-server/ 运行，项目根在其上一层）
+    4. 回退到固定层级计算（兼容旧行为）
 
     注意：mcp-server/src/prompts/ 是一个空的 Python 包目录（仅含 __init__.py），
     不是真正的 prompt 模板目录。真正的模板在项目根的 prompts/summary/ 下。
     """
     def _is_valid_prompts_root(d: Path) -> bool:
-        """检查目录是否包含有效的 prompts 结构。"""
+        """检查目录是否包含有效的 prompts 结构。
+
+        要求 prompts/ 目录中至少有 summary/ 子目录或 codebook_config 文件。
+        排除 mcp-server/src/prompts/（仅含 __init__.py 的空包目录）。
+        """
         prompts = d / "prompts"
-        return (
-            prompts.is_dir()
-            and (
-                (prompts / "summary").is_dir()
-                or (prompts / "codebook_config_v0.3.json").is_file()
-                or (prompts / "codebook_config_v0.2.json").is_file()
-            )
-        )
+        if not prompts.is_dir():
+            return False
+        # 检查是否有实际的 prompt 资源（排除空的 Python 包目录）
+        has_summary = (prompts / "summary").is_dir()
+        has_v03_config = (prompts / "codebook_config_v0.3.json").is_file()
+        has_v02_config = (prompts / "codebook_config_v0.2.json").is_file()
+        return has_summary or has_v03_config or has_v02_config
 
     # Strategy 1: search upward from __file__
     current = Path(__file__).resolve().parent
@@ -68,13 +72,123 @@ def _find_project_root() -> Path:
             break
         current = parent
 
-    # Strategy 3: original fixed-depth calculation
+    # Strategy 3: CWD 可能是 mcp-server/，项目根在其父目录
+    cwd_parent = Path.cwd().parent
+    if _is_valid_prompts_root(cwd_parent):
+        return cwd_parent
+
+    # Strategy 4: original fixed-depth calculation
     return Path(__file__).resolve().parent.parent.parent.parent
 
 
 _PROJECT_ROOT = _find_project_root()
 PROMPTS_DIR = _PROJECT_ROOT / "prompts" / "summary"
 CONFIG_PATH = _PROJECT_ROOT / "prompts" / "codebook_config_v0.2.json"
+
+# ── 内置回退配置（当 JSON 文件均无法加载时使用）──────────
+
+_BUILTIN_CONFIG_FALLBACK: dict = {
+    "role_system_v0_3": {
+        "views": [
+            {
+                "name": "dev",
+                "display_name": "开发者视角",
+                "banned_terms": [],
+            },
+            {
+                "name": "pm",
+                "display_name": "产品经理视角",
+                "banned_terms": [
+                    "幂等 / idempotent", "slug", "冷启动 / cold start",
+                    "连接池 / connection pool", "openapi / swagger",
+                    "env_file / .env", "middleware / 中间件",
+                    "布尔值 / boolean", "回调 / callback", "异步 / async",
+                    "序列化 / serialize", "AST", "NetworkX", "Tree-sitter",
+                ],
+            },
+            {
+                "name": "domain_expert",
+                "display_name": "行业专家视角",
+                "requires_project_domain": True,
+                "supported_domains": ["fintech", "healthcare", "ecommerce", "saas", "general"],
+            },
+        ],
+    },
+    "backward_compatibility": {
+        "mappings": {
+            "ceo": "pm",
+            "pm": "pm",
+            "investor": "pm",
+            "qa": "dev",
+            "dev": "dev",
+            "domain_expert": "domain_expert",
+        },
+    },
+    "project_domain_inference": {
+        "priority_layers": [
+            {"layer": 1, "name": "显式参数", "description": "scan_repo(project_domain='fintech') 中明确指定的值"},
+            {
+                "layer": 2, "name": "自动推断",
+                "description": "从 README.md 关键词和依赖包名推断",
+                "inference_rules": {
+                    "fintech": {
+                        "readme_keywords": ["金融", "支付", "交易", "钱包", "银行", "转账"],
+                        "dependency_markers": ["stripe", "braintree", "square", "wise", "alipay", "paypal"],
+                    },
+                    "healthcare": {
+                        "readme_keywords": ["医疗", "诊断", "患者", "处方", "病历"],
+                        "dependency_markers": ["fhir", "hl7", "dicom", "hl7apy"],
+                    },
+                    "ecommerce": {
+                        "readme_keywords": ["电商", "购物车", "订单", "物流", "商品"],
+                        "dependency_markers": ["shopify", "woocommerce", "bigcommerce", "prestashop"],
+                    },
+                },
+            },
+            {"layer": 3, "name": "术语库记忆", "description": "从 ~/.codebook/memory/{repo_hash}/meta.json 读取"},
+        ],
+    },
+    "guidance_templates": {
+        "dev": "你是 CodeBook 的 AI 助手，正在帮助开发者理解代码。\n\n提供精确的代码定位、调用栈分析和实现细节。\n\n关键信息：函数签名、参数类型、返回值、异常处理、循环依赖、性能瓶颈、内存安全。\n\n可以使用所有技术术语（AST、序列化、中间件、幂等性、连接池等）。\n\n优先包含源代码而非文档。支持追问函数签名、异常处理、边界条件等技术细节。",
+        "pm": "你是 CodeBook 的 AI 助手，正在帮助产品经理理解代码变更的业务影响。\n\n使用纯业务语言描述问题，避免使用技术术语。\n\n关键信息：功能完整性、用户体验影响、工作量估算、依赖关系、风险识别。\n\n禁止使用以下术语：幂等、slug、冷启动、连接池、中间件、序列化、回调、异步、AST、NetworkX、Tree-sitter。必须将这些概念转化为业务语言。\n\n优先包含模块概览而非源代码。支持追问完成度、工作量估算等管理类问题。",
+        "domain_expert": "你是 CodeBook 的 AI 助手，正在帮助行业专家审查代码。\n\n你的任务是用该领域的专业术语翻译代码逻辑，让行业专家能够验证实现是否符合行业标准和最佳实践。\n\n关键信息：业务规则验证、合规检查、风险识别、审计记录。\n\n重点识别涉及数据安全、合规要求、业务规则的代码部分。",
+        "domain_expert_fintech": "你是 CodeBook 的 AI 助手，正在帮助金融合规官审查代码。\n\n项目领域：金融科技。应当使用以下术语及其业务含义：\n- KYC = 客户身份验证\n- AML = 反洗钱检查\n- settlement = 资金结算\n- transaction = 交易\n\n关键检查项：交易金额限制、审计日志、加密存储、访问控制、异常交易检测。",
+        "domain_expert_healthcare": "你是 CodeBook 的 AI 助手，正在帮助医疗数据官审查代码。\n\n项目领域：医疗健康。应当使用以下术语及其业务含义：\n- FHIR = 快速医疗互操作性资源\n- HL7 = 医疗信息交换标准\n- PHI = 受保护的健康信息\n- 患者隐私 = 医疗数据的绝对保密性需求\n- 诊断 = 医学判断\n\n关键检查项：患者数据加密、访问日志、诊断链的可审计性。",
+        "domain_expert_ecommerce": "你是 CodeBook 的 AI 助手，正在帮助电商风控专家审查代码。\n\n项目领域：电子商务。应当使用以下术语及其业务含义：\n- 订单 = 用户购买行为的记录\n- 支付 = 交易金额的验证和转移\n- 物流 = 商品配送的跟踪管理\n- 库存 = 可售商品的数量管理\n- 退款 = 交易取消和金额返还\n\n关键检查项：订单的一致性、支付的原子性、库存扣减时机、退款流程的完整性。",
+    },
+    "banned_terms_in_pm_fields": {
+        "terms": {
+            "幂等 / idempotent": "描述重复操作的具体后果",
+            "slug": "URL 中的文章标识",
+            "冷启动 / cold start": "描述具体缺失场景（如「新用户首页为空」）",
+            "连接池 / connection pool": "同时处理请求的上限",
+            "openapi / swagger": "API 调试页面",
+            "env_file / .env": "配置文件",
+            "middleware / 中间件": "请求处理的中间环节",
+            "布尔值 / boolean": "是/否",
+            "回调 / callback": "完成后自动触发的操作",
+            "异步 / async": "不阻塞其他操作地执行",
+            "序列化 / serialize": "把数据转换成可传输的格式",
+            "AST / 抽象语法树": "代码的结构化表示",
+            "NetworkX": "图论库",
+            "Tree-sitter": "代码解析库",
+        },
+    },
+    "http_status_code_annotations": {
+        "codes": {
+            "200": "成功",
+            "201": "创建成功",
+            "204": "操作成功，无返回内容",
+            "400": "请求有误",
+            "401": "未登录",
+            "403": "没有权限",
+            "404": "找不到",
+            "409": "数据冲突",
+            "422": "数据格式不对",
+            "500": "系统内部错误",
+        },
+    },
+}
 
 
 # ── 数据类 ──────────────────────────────────────────────
@@ -150,25 +264,42 @@ def _load_prompt_template(level: str) -> dict:
     }
     filepath = PROMPTS_DIR / filenames[level]
     if not filepath.exists():
-        raise FileNotFoundError(f"Prompt template not found: {filepath}")
+        # 尝试重新定位项目根（模块初始化时可能 CWD 不同）
+        alt_root = _find_project_root()
+        alt_path = alt_root / "prompts" / "summary" / filenames[level]
+        if alt_path.exists():
+            filepath = alt_path
+        else:
+            raise FileNotFoundError(f"Prompt template not found: {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def _load_codebook_config() -> dict:
-    """加载 codebook_config_v0.3.json，回退到 v0.2。"""
+    """加载 codebook_config_v0.3.json，回退到 v0.2，最终回退到内置默认值。"""
     # Try v0.3 first
     v0_3_path = _PROJECT_ROOT / "prompts" / "codebook_config_v0.3.json"
     if v0_3_path.exists():
-        with open(v0_3_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(v0_3_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning("config.v0_3_load_error", path=str(v0_3_path), error=str(e))
 
     # Fallback to v0.2
-    if not CONFIG_PATH.exists():
-        logger.warning("config.not_found", path=str(CONFIG_PATH))
-        return {}
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning("config.v0_2_load_error", path=str(CONFIG_PATH), error=str(e))
+
+    # 最终回退：内置默认配置（确保核心功能始终可用）
+    logger.warning("config.using_builtin_fallback",
+                    project_root=str(_PROJECT_ROOT),
+                    v0_3_path=str(v0_3_path),
+                    config_path=str(CONFIG_PATH))
+    return _BUILTIN_CONFIG_FALLBACK
 
 
 def _normalize_role(role: str) -> str:

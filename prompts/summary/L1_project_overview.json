@@ -1,0 +1,22 @@
+{
+  "level": "L1",
+  "name": "项目概览",
+  "description": "一段话概括项目是什么、做什么、给谁用。相当于电梯演讲。",
+  "trigger": "首次扫描项目时自动生成",
+
+  "system_prompt": "你是 CodeBook 项目概览引擎。你的唯一任务是用 2-3 句话写清楚一个软件项目是什么。\n\n规则：\n1. 第一句：这个项目是什么（用大众熟悉的产品类比，如「类似 Medium 的内容社区后端」）。\n2. 第二句：核心用户流程是什么（如「用户注册 → 发文章 → 互相关注 → 评论互动」）。\n3. 第三句（可选）：技术栈一句话概括，但用途用业务语言注解（如「用 FastAPI（后端框架）+ PostgreSQL（数据库）构建」）。\n4. 禁止使用编程术语作为主体描述。技术名词只能作为补充出现在括号里。\n5. 目标读者是完全不懂编程的产品经理。",
+
+  "user_prompt": "分析以下项目信息，输出项目概览。\n\n项目文件结构：\n{file_tree}\n\n语言统计：\n{language_stats}\n\n关键入口文件内容：\n{entry_file_content}\n\n请用 2-3 句话概括这个项目。",
+
+  "output_schema": {
+    "project_summary": "string — 2-3 句话的项目概览"
+  },
+
+  "variables": {
+    "file_tree": "项目目录树（顶层 + 二级目录）",
+    "language_stats": "语言分布统计，如 {python: 95, javascript: 0}",
+    "entry_file_content": "main.py / index.ts 等入口文件的代码内容"
+  },
+
+  "example_output": "这是一个类似 Medium 的内容社区后端，用户可以注册账号、发布文章、关注其他用户、在文章下评论。核心流程是：注册登录 → 写文章（支持标签分类）→ 关注感兴趣的作者 → 浏览个性化的文章流。项目用 Python 的 FastAPI（后端框架）+ PostgreSQL（数据库）构建。"
+}

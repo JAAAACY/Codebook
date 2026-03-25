@@ -40,8 +40,19 @@ FASTAPI_REPO = str(FASTAPI_REPO_DIR.resolve())
 RESULTS_DIR = PROJECT_ROOT / "test_results"
 
 # Skip condition for tests requiring the FastAPI repo fixture
+# Check both that the directory exists AND that it's a valid git repo (has .git/)
+def _is_valid_fastapi_repo() -> bool:
+    """Check if FastAPI repo directory exists and is a valid git repository."""
+    if not FASTAPI_REPO_DIR.is_dir():
+        return False
+    # Also check for .git directory or at least a setup.py/pyproject.toml
+    # to avoid false positives from empty or partially-cloned directories
+    has_git = (FASTAPI_REPO_DIR / ".git").exists()
+    has_setup = (FASTAPI_REPO_DIR / "setup.py").exists() or (FASTAPI_REPO_DIR / "pyproject.toml").exists()
+    return has_git or has_setup
+
 skip_if_no_fastapi_repo = pytest.mark.skipif(
-    not FASTAPI_REPO_DIR.is_dir(),
+    not _is_valid_fastapi_repo(),
     reason=f"FastAPI test repo not found at {FASTAPI_REPO_DIR}. "
            f"Clone it with: git clone https://github.com/tiangolo/fastapi.git {FASTAPI_REPO_DIR}",
 )
