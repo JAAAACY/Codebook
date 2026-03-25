@@ -433,6 +433,20 @@ async def scan_repo(
     total_classes = sum(len(r.classes) for r in parse_results)
     total_imports = sum(len(r.imports) for r in parse_results)
     total_calls = sum(len(r.calls) for r in parse_results)
+
+    # M1: 解析质量统计
+    parse_quality = {
+        "native": sum(1 for r in parse_results if r.parse_method == "native"),
+        "full": sum(1 for r in parse_results if r.parse_method == "full"),
+        "partial": sum(1 for r in parse_results if r.parse_method == "partial"),
+        "basic": sum(1 for r in parse_results if r.parse_method == "basic"),
+        "failed": sum(1 for r in parse_results if r.parse_method == "failed"),
+    }
+    avg_confidence = (
+        sum(r.parse_confidence for r in parse_results) / len(parse_results)
+        if parse_results else 1.0
+    )
+
     step_times["parse"] = round(time.time() - step_start, 2)
     logger.info(
         "scan_repo.step2_parse.done",
@@ -441,6 +455,7 @@ async def scan_repo(
         classes=total_classes,
         imports=total_imports,
         calls=total_calls,
+        parse_quality=parse_quality,
         seconds=step_times["parse"],
     )
 
@@ -602,10 +617,34 @@ async def scan_repo(
             "languages": clone_result.languages,
             "scan_time_seconds": total_time,
             "step_times": step_times,
+            "parse_quality": parse_quality,
+            "avg_parse_confidence": round(avg_confidence, 2),
         },
     }
 
     if chapters is not None:
         result["chapters"] = chapters
+
+    # M1: 降级提示
+    partial_ratio = (
+        (parse_quality["partial"] + parse_quality["basic"]) / len(parse_results)
+        if parse_results else 0
+    )
+    if partial_ratio > 0:
+        warnings = []
+        if parse_quality["partial"] > 0 or parse_quality["basic"] > 0:
+            warnings.append(
+                f"{parse_quality['partial'] + parse_quality['basic']}/{len(parse_results)} "
+                f"个文件使用了简化解析（正则 fallback），结构数据可能不完整。"
+            )
+        if parse_quality["failed"] > 0:
+            warnings.append(
+                f"{parse_quality['failed']} 个文件解析失败。"
+            )
+        if partial_ratio > 0.5:
+            warnings.insert(0,
+                "⚠️ 超过半数文件使用简化解析，依赖图和影响分析的准确性可能受限。"
+            )
+        result["parse_warnings"] = warnings
 
     return result

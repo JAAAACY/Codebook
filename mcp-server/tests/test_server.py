@@ -93,7 +93,7 @@ async def test_scan_repo_connections():
 async def test_read_chapter_after_scan():
     """先 scan 再 read_chapter 成功。"""
     await scan_repo(repo_url=CONDUIT_PATH)
-    result = await read_chapter(module_name="fastapi", role="pm")
+    result = await read_chapter(module_name="app", role="pm")
     assert result["status"] == "ok"
     assert len(result["module_cards"]) > 0
     assert "dependency_graph" in result
@@ -121,7 +121,7 @@ async def test_read_chapter_module_not_found():
 async def test_read_chapter_card_schema():
     """模块卡片包含完整 schema 字段。"""
     await scan_repo(repo_url=CONDUIT_PATH)
-    result = await read_chapter(module_name="fastapi")
+    result = await read_chapter(module_name="app")
     assert result["status"] == "ok"
     if result["module_cards"]:
         card = result["module_cards"][0]

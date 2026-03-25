@@ -415,10 +415,8 @@ class TestExtractLocations:
 
 class TestDiagnoseIntegration:
 
-    def test_basic_diagnose(self, build_ctx):
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(module_name="all", role="pm", query="register user email")
-        )
+    async def test_basic_diagnose(self, build_ctx):
+        result = await diagnose(module_name="all", role="pm", query="register user email")
         assert result["status"] == "ok"
         assert result["keywords"]
         assert result["matched_nodes"]
@@ -428,54 +426,40 @@ class TestDiagnoseIntegration:
         assert result["context"]
         assert result["guidance"]
 
-    def test_diagnose_with_module_filter(self, build_ctx):
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(module_name="用户认证", role="pm", query="register login")
-        )
+    async def test_diagnose_with_module_filter(self, build_ctx):
+        result = await diagnose(module_name="用户认证", role="pm", query="register login")
         assert result["status"] == "ok"
         assert "用户认证" in result["matched_modules"]
 
-    def test_diagnose_no_cache(self):
+    async def test_diagnose_no_cache(self):
         """无缓存时应返回错误。"""
         repo_cache.clear_all()
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(query="something")
-        )
+        result = await diagnose(query="something")
         assert result["status"] == "error"
         assert "scan_repo" in result["error"]
 
-    def test_diagnose_empty_query(self, build_ctx):
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(query="")
-        )
+    async def test_diagnose_empty_query(self, build_ctx):
+        result = await diagnose(query="")
         assert result["status"] == "error"
         assert "关键词" in result["error"]
 
-    def test_diagnose_nonexistent_module(self, build_ctx):
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(module_name="不存在的模块", query="test")
-        )
+    async def test_diagnose_nonexistent_module(self, build_ctx):
+        result = await diagnose(module_name="不存在的模块", query="test")
         assert result["status"] == "error"
         assert "available_modules" in result
 
-    def test_diagnose_no_match_fallback(self, build_ctx):
+    async def test_diagnose_no_match_fallback(self, build_ctx):
         """关键词完全不匹配时，应返回模块级概览。"""
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(query="zzzznotexist xyzabc")
-        )
+        result = await diagnose(query="zzzznotexist xyzabc")
         assert result["status"] == "no_exact_match"
         assert result["call_chain"]  # 模块级图
 
-    def test_diagnose_dev_role(self, build_ctx):
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(role="dev", query="register user")
-        )
+    async def test_diagnose_dev_role(self, build_ctx):
+        result = await diagnose(role="dev", query="register user")
         assert result["status"] == "ok"
         assert "开发者" in result["guidance"]
 
-    def test_diagnose_chinese_query(self, build_ctx):
+    async def test_diagnose_chinese_query(self, build_ctx):
         """中文查询也能匹配（通过函数名中的英文部分）。"""
-        result = asyncio.get_event_loop().run_until_complete(
-            diagnose(query="用户 register email 注册")
-        )
+        result = await diagnose(query="用户 register email 注册")
         assert result["status"] in ("ok", "no_exact_match")

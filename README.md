@@ -220,7 +220,8 @@ User Input (natural language query)
     ↓
 [MCP Server Layer] ── Routes requests to appropriate tool
     ↓
-[Code Analysis Layer] ── Tree-sitter AST parsing + NetworkX dependency graphs
+[Code Analysis Layer] ── Tree-sitter AST parsing + regex fallback
+    ↓                     (graceful degradation when tree-sitter unavailable)
     ↓
 [Role Adapter Layer] ── Translates technical details to user role perspective
     ↓
@@ -228,6 +229,29 @@ User Input (natural language query)
 ```
 
 CodeBook does not train custom models. It leverages high-quality LLM reasoning (via the MCP host) combined with precise code analysis to deliver accurate insights.
+
+## Graceful Degradation
+
+CodeBook uses a two-tier parsing strategy to ensure reliability:
+
+1. **Full mode** (tree-sitter): High-fidelity AST parsing with complete function signatures, class hierarchies, call chains, and scope tracking. Requires `tree-sitter-language-pack`.
+2. **Partial mode** (regex fallback): When tree-sitter is unavailable or fails for a specific language, CodeBook automatically falls back to regex-based extraction. This captures top-level functions, classes, imports, and basic call patterns.
+
+Each parsed file includes a `parse_method` field (`full` / `partial` / `basic` / `failed`) so downstream tools and users know the precision level. When more than 50% of files use simplified parsing, scan results include a warning.
+
+**To install with full tree-sitter support:**
+
+```bash
+pip install -e ".[full]"
+```
+
+**Without tree-sitter (regex-only mode):**
+
+```bash
+pip install -e .
+```
+
+The system never crashes due to missing parsers — it always produces usable results at the best available precision level.
 
 ## Testing
 

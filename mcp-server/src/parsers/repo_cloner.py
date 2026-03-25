@@ -41,9 +41,22 @@ EXCLUDED_FILES = {
 }
 
 CODE_EXTENSIONS = {
+    # 原有
     ".py", ".ts", ".tsx", ".js", ".jsx",
     ".java", ".go", ".rs", ".cpp", ".c", ".h", ".hpp",
     ".cs", ".rb", ".php", ".swift", ".kt",
+    # 系统级 / 编译型
+    ".zig", ".nim", ".v", ".d",
+    # JVM / .NET
+    ".scala", ".groovy", ".clj", ".cljs",
+    # 移动端
+    ".dart", ".m", ".mm",
+    # 函数式
+    ".hs", ".ml", ".mli", ".ex", ".exs", ".erl", ".hrl",
+    # 脚本 / 数据科学
+    ".lua", ".pl", ".pm", ".r", ".R", ".jl",
+    # Shell
+    ".sh", ".bash", ".zsh",
 }
 
 CONFIG_EXTENSIONS = {
@@ -51,6 +64,7 @@ CONFIG_EXTENSIONS = {
 }
 
 EXTENSION_TO_LANGUAGE = {
+    # 原有
     ".py": "python",
     ".ts": "typescript", ".tsx": "typescript",
     ".js": "javascript", ".jsx": "javascript",
@@ -63,6 +77,30 @@ EXTENSION_TO_LANGUAGE = {
     ".php": "php",
     ".swift": "swift",
     ".kt": "kotlin",
+    # 系统级 / 编译型
+    ".zig": "zig",
+    ".nim": "nim",
+    ".v": "v",
+    ".d": "d",
+    # JVM / .NET
+    ".scala": "scala",
+    ".groovy": "groovy",
+    ".clj": "clojure", ".cljs": "clojure",
+    # 移动端
+    ".dart": "dart",
+    ".m": "objc", ".mm": "objc",
+    # 函数式
+    ".hs": "haskell",
+    ".ml": "ocaml", ".mli": "ocaml",
+    ".ex": "elixir", ".exs": "elixir",
+    ".erl": "erlang", ".hrl": "erlang",
+    # 脚本 / 数据科学
+    ".lua": "lua",
+    ".pl": "perl", ".pm": "perl",
+    ".r": "r", ".R": "r",
+    ".jl": "julia",
+    # Shell
+    ".sh": "bash", ".bash": "bash", ".zsh": "bash",
 }
 
 

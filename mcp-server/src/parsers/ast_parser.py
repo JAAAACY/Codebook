@@ -1,17 +1,100 @@
 """ast_parser — 用 Tree-sitter 解析源代码文件，提取结构信息。"""
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 
 import structlog
-try:
-    import tree_sitter_language_pack as tree_sitter_languages
-except ImportError:
-    import tree_sitter_languages
 
 from src.parsers.repo_cloner import FileInfo
 
 logger = structlog.get_logger()
+
+# ── Tree-sitter 依赖隔离（M1-6）─────────────────────────
+# tree-sitter-language-pack 从硬依赖改为可选依赖
+# 缺失时系统可启动，走正则 fallback
+
+_tree_sitter_module = None
+try:
+    import tree_sitter_language_pack as _tree_sitter_module
+except ImportError:
+    try:
+        import tree_sitter_languages as _tree_sitter_module
+    except ImportError:
+        logger.warning("tree_sitter.unavailable",
+                       msg="tree-sitter 包未安装，将使用正则 fallback")
+
+
+# ── Tree-sitter 健康检测（M1-1）─────────────────────────
+
+class TreeSitterHealthCheck:
+    """tree-sitter 可用性检测，带缓存。
+
+    启动时探测一次，之后缓存结果。
+    支持按语言检测：某些语言的 grammar 可能缺失。
+    """
+
+    _CACHE_TTL = 300  # 5 分钟缓存
+
+    def __init__(self):
+        self._available: dict[str, bool] = {}
+        self._global_available: bool | None = None
+        self._last_check: float = 0
+
+    def _check_global(self) -> bool:
+        """检测 tree-sitter 模块是否整体可用。"""
+        if _tree_sitter_module is None:
+            return False
+        try:
+            # 用 Python parser 做探测
+            parser = _tree_sitter_module.get_parser("python")
+            tree = parser.parse(b"def test(): pass")
+            return tree.root_node is not None
+        except Exception as e:
+            logger.warning("tree_sitter.probe_failed", error=str(e))
+            return False
+
+    def is_available(self, language: str | None = None) -> bool:
+        """检查 tree-sitter 是否可用。
+
+        Args:
+            language: 可选，检查特定语言的 parser 是否可用。
+                      None 则检查全局可用性。
+        """
+        now = time.monotonic()
+        # 缓存过期则重新检测
+        if self._global_available is None or (now - self._last_check) > self._CACHE_TTL:
+            self._global_available = self._check_global()
+            self._last_check = now
+            self._available.clear()
+            logger.info("tree_sitter.health_check",
+                        available=self._global_available)
+
+        if not self._global_available:
+            return False
+
+        if language is None:
+            return True
+
+        if language not in self._available:
+            try:
+                _tree_sitter_module.get_parser(language)
+                self._available[language] = True
+            except Exception:
+                self._available[language] = False
+                logger.debug("tree_sitter.lang_unavailable", language=language)
+
+        return self._available[language]
+
+    def reset(self):
+        """重置缓存，强制下次重新检测。"""
+        self._global_available = None
+        self._available.clear()
+        self._last_check = 0
+
+
+# 全局单例
+_health_check = TreeSitterHealthCheck()
 
 # ── 数据类 ──────────────────────────────────────────────
 
@@ -67,6 +150,10 @@ class ParseResult:
     calls: list[CallInfo] = field(default_factory=list)
     line_count: int = 0
     parse_errors: list[str] = field(default_factory=list)
+    # M1 新增：解析方式追踪
+    parse_method: str = "full"      # full / partial / basic / failed
+    parse_confidence: float = 1.0   # 0.0-1.0，tree-sitter=1.0，正则=0.5-0.8
+    fallback_reason: str = ""       # 降级原因，如 "tree-sitter unavailable"
 
 
 # ── 语言支持映射 ─────────────────────────────────────────
@@ -159,9 +246,226 @@ LANG_CONFIG = {
         "import": ["import_declaration"],
         "call": ["call_expression"],
         "name_field": "name",
-        "params_field": None,  # Swift 参数不在 field 中，需要专用提取
+        "params_field": None,
         "body_field": "body",
-        "superclass_field": None,  # Swift 继承通过 inheritance_specifier 子节点表示
+        "superclass_field": None,
+    },
+    # ── 原有扩展名但缺 LANG_CONFIG 的语言 ──────────────────
+    "ruby": {
+        "function_def": ["method", "singleton_method"],
+        "class_def": ["class", "module"],
+        "import": ["call"],  # require / require_relative
+        "call": ["call", "command_call"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": "superclass",
+    },
+    "php": {
+        "function_def": ["function_definition", "method_declaration"],
+        "class_def": ["class_declaration", "interface_declaration", "trait_declaration"],
+        "import": ["namespace_use_declaration"],
+        "call": ["function_call_expression", "member_call_expression"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": "base_clause",
+    },
+    "kotlin": {
+        "function_def": ["function_declaration"],
+        "class_def": ["class_declaration", "object_declaration"],
+        "import": ["import_header"],
+        "call": ["call_expression"],
+        "name_field": "simple_identifier",
+        "params_field": "function_value_parameters",
+        "body_field": "function_body",
+        "superclass_field": "delegation_specifiers",
+    },
+    # ── 系统级 / 编译型 ────────────────────────────────────
+    "zig": {
+        "function_def": ["FnDecl", "TestDecl"],
+        "class_def": ["ContainerDecl"],  # struct / enum / union
+        "import": ["BuiltinCallExpr"],  # @import(...)
+        "call": ["CallExpr", "BuiltinCallExpr"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": None,
+    },
+    "nim": {
+        "function_def": ["proc_def", "func_def", "method_def", "template_def", "macro_def"],
+        "class_def": ["type_section"],
+        "import": ["import_stmt", "from_stmt"],
+        "call": ["call"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": None,
+    },
+    "v": {
+        "function_def": ["function_declaration"],
+        "class_def": ["struct_declaration", "interface_declaration", "enum_declaration"],
+        "import": ["import_declaration"],
+        "call": ["call_expression"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": None,
+    },
+    "d": {
+        "function_def": ["function_declaration"],
+        "class_def": ["class_declaration", "struct_declaration", "interface_declaration"],
+        "import": ["import_declaration"],
+        "call": ["call_expression"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": "base_class_list",
+    },
+    # ── JVM / .NET ─────────────────────────────────────────
+    "scala": {
+        "function_def": ["function_definition", "function_declaration"],
+        "class_def": ["class_definition", "object_definition", "trait_definition"],
+        "import": ["import_declaration"],
+        "call": ["call_expression"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": "extends_clause",
+    },
+    "groovy": {
+        "function_def": ["method_declaration"],
+        "class_def": ["class_declaration"],
+        "import": ["import_declaration"],
+        "call": ["method_call"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": "superclass",
+    },
+    "clojure": {
+        "function_def": ["list_lit"],  # (defn ...) — 通过首个符号判断
+        "class_def": ["list_lit"],  # (defrecord ...) / (defprotocol ...)
+        "import": ["list_lit"],  # (require ...) / (import ...)
+        "call": ["list_lit"],
+        "name_field": None,  # Clojure 是同像性语言，需要特殊提取
+        "params_field": None,
+        "body_field": None,
+        "superclass_field": None,
+    },
+    # ── 移动端 ─────────────────────────────────────────────
+    "dart": {
+        "function_def": ["function_signature", "method_signature"],
+        "class_def": ["class_definition"],
+        "import": ["import_or_export"],
+        "call": ["call_expression"],
+        "name_field": "name",
+        "params_field": "formal_parameter_list",
+        "body_field": "function_body",
+        "superclass_field": "superclass",
+    },
+    "objc": {
+        "function_def": ["function_definition", "method_declaration"],
+        "class_def": ["class_interface", "class_implementation", "protocol_declaration"],
+        "import": ["preproc_import", "preproc_include"],
+        "call": ["call_expression", "message_expression"],
+        "name_field": "declarator",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": "superclass_reference",
+    },
+    # ── 函数式 ─────────────────────────────────────────────
+    "haskell": {
+        "function_def": ["function"],
+        "class_def": ["class", "data", "newtype"],
+        "import": ["import"],
+        "call": ["apply"],
+        "name_field": "name",
+        "params_field": "patterns",
+        "body_field": "match",
+        "superclass_field": None,
+    },
+    "ocaml": {
+        "function_def": ["let_binding", "value_definition"],
+        "class_def": ["type_definition", "class_definition", "module_definition"],
+        "import": ["open_statement"],
+        "call": ["application"],
+        "name_field": "name",
+        "params_field": "parameter",
+        "body_field": "body",
+        "superclass_field": None,
+    },
+    "elixir": {
+        "function_def": ["call"],  # def / defp 是宏调用
+        "class_def": ["call"],  # defmodule 是宏调用
+        "import": ["call"],  # import / use / require / alias
+        "call": ["call"],
+        "name_field": None,  # 需要特殊提取
+        "params_field": "arguments",
+        "body_field": "do_block",
+        "superclass_field": None,
+    },
+    "erlang": {
+        "function_def": ["function"],
+        "class_def": [],  # Erlang 无类概念
+        "import": ["module_attribute"],  # -import(...)
+        "call": ["call"],
+        "name_field": "name",
+        "params_field": "args",
+        "body_field": "clause_body",
+        "superclass_field": None,
+    },
+    # ── 脚本 / 数据科学 ───────────────────────────────────
+    "lua": {
+        "function_def": ["function_declaration", "function_definition", "local_function"],
+        "class_def": [],  # Lua 无原生类
+        "import": ["function_call"],  # require(...)
+        "call": ["function_call"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": None,
+    },
+    "perl": {
+        "function_def": ["subroutine_declaration_statement"],
+        "class_def": ["package_statement"],
+        "import": ["use_statement", "require_statement"],
+        "call": ["call_expression", "method_call_expression"],
+        "name_field": "name",
+        "params_field": None,  # Perl 参数通过 @_ 隐式传递
+        "body_field": "body",
+        "superclass_field": None,
+    },
+    "r": {
+        "function_def": ["function_definition"],
+        "class_def": [],  # R 的 S4/R6 类不是语法级别的
+        "import": ["call"],  # library() / require()
+        "call": ["call"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": None,
+    },
+    "julia": {
+        "function_def": ["function_definition", "short_function_definition"],
+        "class_def": ["struct_definition", "abstract_definition"],
+        "import": ["import_statement", "using_statement"],
+        "call": ["call_expression"],
+        "name_field": "name",
+        "params_field": "parameters",
+        "body_field": "body",
+        "superclass_field": "supertype_clause",
+    },
+    # ── Shell ──────────────────────────────────────────────
+    "bash": {
+        "function_def": ["function_definition"],
+        "class_def": [],
+        "import": ["command"],  # source / .
+        "call": ["command"],
+        "name_field": "name",
+        "params_field": None,
+        "body_field": "body",
+        "superclass_field": None,
     },
 }
 
@@ -406,9 +710,12 @@ def _extract_swift_callee_name(call_node) -> str:
 # ── 核心解析函数 ─────────────────────────────────────────
 
 async def parse_file(file: FileInfo) -> ParseResult:
-    """用 Tree-sitter 解析单个文件。
+    """解析单个文件，优先用 tree-sitter，不可用时降级到正则。
 
-    提取所有 class、function、import 和函数调用。
+    M1 降级路由：
+    1. 检查 tree-sitter 是否可用
+    2. 可用 → 尝试 tree-sitter，失败再 fallback
+    3. 不可用 → 直接走正则
 
     Args:
         file: FileInfo 对象。
@@ -423,24 +730,67 @@ async def parse_file(file: FileInfo) -> ParseResult:
     )
 
     # 不支持的语言或配置文件
-    if file.is_config or file.language not in LANG_CONFIG:
+    if file.is_config:
         return result
 
-    lang_config = LANG_CONFIG[file.language]
-
+    # 读取源码（tree-sitter 和正则都需要）
     try:
         with open(file.abs_path, "rb") as f:
             source = f.read()
     except (OSError, UnicodeDecodeError) as e:
         result.parse_errors.append(f"Read error: {e}")
+        result.parse_method = "failed"
+        result.parse_confidence = 0.0
         return result
 
+    # ── M2: Python native ast 优先解析 ──
+    if file.language == "python":
+        try:
+            from src.parsers.native_extractors import PythonAstExtractor
+            text = source.decode("utf-8", errors="replace")
+            native_result = PythonAstExtractor().extract_all(text, file.path)
+            result.classes = native_result.classes
+            result.functions = native_result.functions
+            result.imports = native_result.imports
+            result.calls = native_result.calls
+            result.line_count = native_result.line_count
+            result.parse_method = native_result.parse_method
+            result.parse_confidence = native_result.parse_confidence
+            logger.debug(
+                "parse_file.native_ast",
+                file=file.path,
+                functions=len(result.functions),
+                classes=len(result.classes),
+            )
+            return result
+        except SyntaxError as e:
+            result.fallback_reason = f"ast parse error: {e}"
+            logger.debug("parse_file.native_ast_fallback", file=file.path, error=str(e))
+        except Exception as e:
+            result.fallback_reason = f"native ast error: {e}"
+            logger.debug("parse_file.native_ast_error", file=file.path, error=str(e))
+
+    # ── M1 降级路由 ──
+    # 语言不在 LANG_CONFIG 中，直接走正则
+    if file.language not in LANG_CONFIG:
+        return _parse_with_regex(file, source, result)
+
+    lang_config = LANG_CONFIG[file.language]
+
+    # 检查 tree-sitter 是否可用
+    if not _health_check.is_available(file.language):
+        result.fallback_reason = "tree-sitter unavailable"
+        return _parse_with_regex(file, source, result)
+
+    # 尝试 tree-sitter 解析（带超时保护）
     try:
-        parser = tree_sitter_languages.get_parser(file.language)
+        parser = _tree_sitter_module.get_parser(file.language)
         tree = parser.parse(source)
     except Exception as e:
-        result.parse_errors.append(f"Parse error: {e}")
-        return result
+        # tree-sitter 失败，降级到正则
+        logger.debug("tree_sitter.parse_failed", file=file.path, error=str(e))
+        result.fallback_reason = f"tree-sitter parse error: {e}"
+        return _parse_with_regex(file, source, result)
 
     root = tree.root_node
     func_types = set(lang_config.get("function_def", []))
@@ -575,14 +925,61 @@ async def parse_file(file: FileInfo) -> ParseResult:
             class_stack.pop()
 
     _walk_tree(root, visitor, on_leave=on_leave)
+    result.parse_method = "full"
+    result.parse_confidence = 1.0
     logger.debug(
         "parse_file.done",
         file=file.path,
+        method=result.parse_method,
         classes=len(result.classes),
         functions=len(result.functions),
         imports=len(result.imports),
         calls=len(result.calls),
     )
+    return result
+
+
+def _parse_with_regex(file: FileInfo, source: bytes, result: ParseResult) -> ParseResult:
+    """用正则 fallback 解析文件（M1 核心降级路径）。"""
+    from src.parsers.regex_extractor import get_extractor, ParseMethod
+
+    try:
+        text = source.decode("utf-8", errors="replace")
+    except Exception as e:
+        result.parse_errors.append(f"Decode error in fallback: {e}")
+        result.parse_method = ParseMethod.FAILED.value
+        result.parse_confidence = 0.0
+        return result
+
+    try:
+        extractor = get_extractor(file.language)
+        fallback_result = extractor.extract_all(text, file.path, file.language)
+
+        # 将 fallback 结果合并到 result（保留已有的 parse_errors 和 fallback_reason）
+        result.classes = fallback_result.classes
+        result.functions = fallback_result.functions
+        result.imports = fallback_result.imports
+        result.calls = fallback_result.calls
+        result.line_count = fallback_result.line_count
+        result.parse_method = fallback_result.parse_method
+        result.parse_confidence = fallback_result.parse_confidence
+
+        logger.debug(
+            "parse_file.regex_fallback",
+            file=file.path,
+            method=result.parse_method,
+            confidence=result.parse_confidence,
+            reason=result.fallback_reason,
+            classes=len(result.classes),
+            functions=len(result.functions),
+            imports=len(result.imports),
+        )
+    except Exception as e:
+        result.parse_errors.append(f"Regex fallback error: {e}")
+        result.parse_method = ParseMethod.FAILED.value
+        result.parse_confidence = 0.0
+        logger.error("parse_file.regex_fallback_failed", file=file.path, error=str(e))
+
     return result
 
 

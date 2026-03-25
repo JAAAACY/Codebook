@@ -27,8 +27,21 @@ class Settings(BaseSettings):
     max_repo_size_mb: int = 100
     clone_timeout_seconds: int = 120
     supported_languages: list[str] = [
+        # 原有
         "python", "typescript", "javascript", "java", "go", "rust", "cpp", "csharp",
-        "swift",
+        "swift", "ruby", "php", "kotlin",
+        # 系统级 / 编译型
+        "zig", "nim", "v", "d",
+        # JVM / .NET
+        "scala", "groovy", "clojure",
+        # 移动端
+        "dart", "objc",
+        # 函数式
+        "haskell", "ocaml", "elixir", "erlang",
+        # 脚本 / 数据科学
+        "lua", "perl", "r", "julia",
+        # Shell
+        "bash",
     ]
 
     # 缓存
