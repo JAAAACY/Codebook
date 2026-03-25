@@ -43,10 +43,9 @@ codebook = "src.cli:cli_main"
 codebook-server = "src.server:main"
 
 [project.urls]
-Homepage = "https://github.com/codebook-app/codebook"
-Documentation = "https://codebook.app/docs"
-Repository = "https://github.com/codebook-app/codebook"
-Issues = "https://github.com/codebook-app/codebook/issues"
+Homepage = "https://github.com/JAAAACY/Codebook"
+Repository = "https://github.com/JAAAACY/Codebook"
+Issues = "https://github.com/JAAAACY/Codebook/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

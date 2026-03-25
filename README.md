@@ -1,6 +1,6 @@
 # CodeBook — The Code Understanding Layer
 
-[![Tests](https://github.com/codebook-app/codebook/actions/workflows/test.yml/badge.svg)](https://github.com/codebook-app/codebook/actions/workflows/test.yml)
+[![Tests](https://github.com/JAAAACY/Codebook/actions/workflows/test.yml/badge.svg)](https://github.com/JAAAACY/Codebook/actions/workflows/test.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -27,22 +27,41 @@ CodeBook enables anyone to understand, diagnose, and propose changes to software
 
 ### Prerequisites
 - Python 3.10 or higher
-- pip or uv
+- pip3 (macOS/Linux) or uv
+
+> **macOS users**: macOS does not ship with `python` / `pip`. Use `python3` / `pip3` instead, or install [uv](https://docs.astral.sh/uv/) for a zero-config experience.
 
 ### Quick Start
 
 ```bash
 # Clone the repository
-git clone https://github.com/codebook-app/codebook.git
-cd codebook
+git clone https://github.com/JAAAACY/Codebook.git
+cd Codebook
 
 # Install the MCP server
 cd mcp-server
-pip install -e ".[dev]"
+pip3 install -e ".[dev]"
 
 # Verify installation
-python -m pytest tests/ -q
+python3 -m pytest tests/ -q
 ```
+
+### Upgrading from a Previous Version
+
+If you already have CodeBook installed:
+
+```bash
+cd Codebook
+git pull origin main
+
+cd mcp-server
+pip3 install -e ".[dev]" --upgrade
+
+# Verify tree-sitter grammars are available (new in v0.2)
+python3 -c "import tree_sitter_language_pack; print('OK')"
+```
+
+> **What changed in v0.2**: `tree-sitter-language-pack` is now a core dependency (previously optional). The upgrade command will install it automatically. This gives you native AST parsing for Bash, JS, TS, Python and 10+ languages — no more regex fallback.
 
 ### Integration with Claude Desktop
 
@@ -54,9 +73,9 @@ Edit your MCP configuration file (typically `~/.claude_desktop_config.json` or p
 {
   "mcpServers": {
     "codebook": {
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "src.server"],
-      "cwd": "/path/to/codebook/mcp-server"
+      "cwd": "/path/to/Codebook/mcp-server"
     }
   }
 }
@@ -251,13 +270,13 @@ All 396 tests pass (100% coverage of core features):
 cd mcp-server
 
 # Run all tests
-python -m pytest tests/ -v
+python3 -m pytest tests/ -v
 
 # Run specific test module
-python -m pytest tests/test_scan_repo.py -v
+python3 -m pytest tests/test_scan_repo.py -v
 
 # Run with coverage
-python -m pytest tests/ --cov=src --cov-report=html
+python3 -m pytest tests/ --cov=src --cov-report=html
 ```
 
 Tests include:
@@ -338,9 +357,8 @@ CodeBook is released under the [MIT License](LICENSE). See the LICENSE file for 
 
 ## Support
 
-- **Documentation**: [codebook.app/docs](https://codebook.app/docs)
-- **Issues**: [GitHub Issues](https://github.com/codebook-app/codebook/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/codebook-app/codebook/discussions)
+- **Issues**: [GitHub Issues](https://github.com/JAAAACY/Codebook/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/JAAAACY/Codebook/discussions)
 
 ---
 

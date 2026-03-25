@@ -7,11 +7,11 @@
 ```bash
 cd mcp-server
 
-# 安装依赖
-pip install -e ".[dev]"
+# 安装依赖（macOS 请用 pip3）
+pip3 install -e ".[dev]"
 
 # 启动 MCP Server（stdio 模式，供 Claude Desktop 使用）
-python -m src.server
+python3 -m src.server
 
 # 或使用 entry point
 codebook
@@ -25,7 +25,7 @@ codebook
 {
   "mcpServers": {
     "codebook": {
-      "command": "python",
+      "command": "python3",
       "args": ["-m", "src.server"],
       "cwd": "/path/to/mcp-server"
     }
