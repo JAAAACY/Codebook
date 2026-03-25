@@ -1,7 +1,9 @@
 """ast_parser — 用 Tree-sitter 解析源代码文件，提取结构信息。"""
 
 import asyncio
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 
 import structlog
@@ -11,18 +13,71 @@ from src.parsers.repo_cloner import FileInfo
 logger = structlog.get_logger()
 
 # ── Tree-sitter 依赖隔离（M1-6）─────────────────────────
-# tree-sitter-language-pack 从硬依赖改为可选依赖
+# tree-sitter-language-pack 是核心依赖（M3-1 提升）
 # 缺失时系统可启动，走正则 fallback
 
 _tree_sitter_module = None
-try:
-    import tree_sitter_language_pack as _tree_sitter_module
-except ImportError:
+
+
+def _try_import_tree_sitter():
+    """尝试导入 tree-sitter 包，包括用户 site-packages 路径修复。"""
+    global _tree_sitter_module
+    if _tree_sitter_module is not None:
+        return
+
+    # 第一次尝试：直接导入
     try:
-        import tree_sitter_languages as _tree_sitter_module
+        import tree_sitter_language_pack as mod
+        _tree_sitter_module = mod
+        return
     except ImportError:
-        logger.warning("tree_sitter.unavailable",
-                       msg="tree-sitter 包未安装，将使用正则 fallback")
+        pass
+
+    try:
+        import tree_sitter_languages as mod
+        _tree_sitter_module = mod
+        return
+    except ImportError:
+        pass
+
+    # 第二次尝试：显式添加用户 site-packages 到 sys.path
+    # MCP server 进程可能缺少用户级 site-packages 路径
+    import sys
+    import site
+    user_site = site.getusersitepackages()
+    if user_site not in sys.path:
+        sys.path.insert(0, user_site)
+        logger.info("tree_sitter.path_fix", added_path=user_site)
+        try:
+            import tree_sitter_language_pack as mod
+            _tree_sitter_module = mod
+            return
+        except ImportError:
+            pass
+
+    # 第三次尝试：搜索常见安装路径
+    import glob as glob_mod
+    for pattern in [
+        "/sessions/*/.*local/lib/python*/site-packages",
+        os.path.expanduser("~/.local/lib/python*/site-packages"),
+    ]:
+        for path in glob_mod.glob(pattern):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+                try:
+                    import tree_sitter_language_pack as mod
+                    _tree_sitter_module = mod
+                    logger.info("tree_sitter.found_at", path=path)
+                    return
+                except ImportError:
+                    pass
+
+    logger.warning("tree_sitter.unavailable",
+                   msg="tree-sitter 包未安装，将使用正则 fallback")
+
+
+# 启动时尝试导入
+_try_import_tree_sitter()
 
 
 # ── Tree-sitter 健康检测（M1-1）─────────────────────────
@@ -43,6 +98,9 @@ class TreeSitterHealthCheck:
 
     def _check_global(self) -> bool:
         """检测 tree-sitter 模块是否整体可用。"""
+        if _tree_sitter_module is None:
+            # 延迟重试：进程启动时可能还没装好
+            _try_import_tree_sitter()
         if _tree_sitter_module is None:
             return False
         try:
@@ -857,10 +915,13 @@ async def parse_file(file: FileInfo) -> ParseResult:
             elif file.language == "python":
                 params_node = _find_child_by_field(node, lang_config["params_field"])
                 params = _extract_python_params(params_node)
-            else:
+            elif lang_config.get("params_field") is not None:
                 params_node = _find_child_by_field(node, lang_config["params_field"])
                 params = [_get_node_text(p) for p in (params_node.children if params_node else [])
                           if p.type not in ("(", ")", ",")]
+            else:
+                # 语言无参数字段（如 bash）
+                params = []
 
             # Docstring (Python only)
             docstring = None
@@ -983,8 +1044,30 @@ def _parse_with_regex(file: FileInfo, source: bytes, result: ParseResult) -> Par
     return result
 
 
+def _parse_file_sync(file: FileInfo) -> ParseResult:
+    """同步版本的 parse_file，供 ThreadPoolExecutor 使用。
+
+    每个线程创建独立的事件循环来运行 async parse_file。
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(parse_file(file))
+    finally:
+        loop.close()
+
+
+# 并行解析默认配置
+_DEFAULT_MAX_WORKERS = min(os.cpu_count() or 4, 8)
+_SINGLE_FILE_TIMEOUT = 5  # 秒
+
+
 async def parse_all(files: list[FileInfo]) -> list[ParseResult]:
-    """并行解析所有文件。
+    """并行解析所有文件（使用 ThreadPoolExecutor 实现真正的并行）。
+
+    tree-sitter 是 C 扩展，会释放 GIL，因此 ThreadPoolExecutor
+    可以实现真正的并行解析。每个线程创建独立的 Parser 实例。
+
+    单文件超时 5 秒，超时则退化到正则 fallback 并记录警告。
 
     Args:
         files: 要解析的文件列表。
@@ -992,15 +1075,49 @@ async def parse_all(files: list[FileInfo]) -> list[ParseResult]:
     Returns:
         每个文件的 ParseResult 列表。
     """
-    tasks = [parse_file(f) for f in files if not f.is_config]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    code_files = [f for f in files if not f.is_config]
 
-    parsed = []
-    for r in results:
-        if isinstance(r, Exception):
-            logger.error("parse_file.exception", error=str(r))
-        else:
-            parsed.append(r)
+    if not code_files:
+        return []
+
+    parsed: list[ParseResult] = []
+    loop = asyncio.get_event_loop()
+
+    max_workers = min(_DEFAULT_MAX_WORKERS, len(code_files))
+    logger.info("parse_all.start",
+                total_files=len(code_files),
+                max_workers=max_workers)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
+        future_to_file = {
+            executor.submit(_parse_file_sync, f): f
+            for f in code_files
+        }
+
+        # 收集结果（带单文件超时）
+        for future in future_to_file:
+            file = future_to_file[future]
+            try:
+                result = future.result(timeout=_SINGLE_FILE_TIMEOUT)
+                parsed.append(result)
+            except FuturesTimeoutError:
+                logger.warning("parse_file.timeout",
+                               file=file.path,
+                               timeout=_SINGLE_FILE_TIMEOUT)
+                # 超时 → 创建基础结果
+                parsed.append(ParseResult(
+                    file_path=file.path,
+                    language=file.language,
+                    line_count=file.line_count,
+                    parse_method="basic",
+                    parse_confidence=0.3,
+                    fallback_reason=f"timeout after {_SINGLE_FILE_TIMEOUT}s",
+                ))
+            except Exception as e:
+                logger.error("parse_file.exception",
+                             file=file.path,
+                             error=str(e))
 
     logger.info(
         "parse_all.done",

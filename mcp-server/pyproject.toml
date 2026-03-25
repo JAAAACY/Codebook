@@ -25,11 +25,12 @@ dependencies = [
     "structlog>=24.1.0",
     "pydantic-settings>=2.1.0",
     "networkx>=3.0",
+    "tree-sitter-language-pack>=1.0.0",
 ]
 
 [project.optional-dependencies]
 full = [
-    "tree-sitter-language-pack>=1.0.0",
+    # tree-sitter-language-pack 已提升为核心依赖
 ]
 dev = [
     "pytest>=8.0",

@@ -45,6 +45,8 @@ CODE_EXTENSIONS = {
     ".py", ".ts", ".tsx", ".js", ".jsx",
     ".java", ".go", ".rs", ".cpp", ".c", ".h", ".hpp",
     ".cs", ".rb", ".php", ".swift", ".kt",
+    # JS/TS 变体
+    ".cjs", ".mjs", ".mts",
     # 系统级 / 编译型
     ".zig", ".nim", ".v", ".d",
     # JVM / .NET
@@ -66,8 +68,8 @@ CONFIG_EXTENSIONS = {
 EXTENSION_TO_LANGUAGE = {
     # 原有
     ".py": "python",
-    ".ts": "typescript", ".tsx": "typescript",
-    ".js": "javascript", ".jsx": "javascript",
+    ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript",
+    ".js": "javascript", ".jsx": "javascript", ".cjs": "javascript", ".mjs": "javascript",
     ".java": "java",
     ".go": "go",
     ".rs": "rust",
@@ -102,6 +104,39 @@ EXTENSION_TO_LANGUAGE = {
     # Shell
     ".sh": "bash", ".bash": "bash", ".zsh": "bash",
 }
+
+# Shebang → 语言映射（用于无扩展名文件）
+SHEBANG_PATTERNS = {
+    "bash": ["#!/bin/bash", "#!/usr/bin/env bash", "#!/bin/sh", "#!/usr/bin/env sh"],
+    "python": ["#!/usr/bin/env python", "#!/usr/bin/python"],
+    "ruby": ["#!/usr/bin/env ruby", "#!/usr/bin/ruby"],
+    "perl": ["#!/usr/bin/env perl", "#!/usr/bin/perl"],
+    "javascript": ["#!/usr/bin/env node", "#!/usr/bin/node"],
+}
+
+
+def _detect_language_by_shebang(file_path: str) -> str | None:
+    """通过 shebang 行检测文件语言（用于无扩展名文件）。
+
+    Args:
+        file_path: 文件绝对路径。
+
+    Returns:
+        语言名称（如 "bash"），未识别则返回 None。
+    """
+    try:
+        with open(file_path, "rb") as f:
+            first_line = f.readline(256).strip()
+        if not first_line.startswith(b"#!"):
+            return None
+        shebang = first_line.decode("utf-8", errors="replace").strip()
+        for language, patterns in SHEBANG_PATTERNS.items():
+            for pattern in patterns:
+                if shebang.startswith(pattern):
+                    return language
+        return None
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 # ── 数据类 ──────────────────────────────────────────────
@@ -289,12 +324,23 @@ def _scan_files_parallel(repo_path: str, max_files: int = 5000) -> tuple[list[Fi
                 is_config = ext in CONFIG_EXTENSIONS
                 is_code = ext in CODE_EXTENSIONS
 
+                # 无扩展名文件：尝试 shebang 检测
+                if not is_code and not is_config and not ext:
+                    shebang_lang = _detect_language_by_shebang(abs_path)
+                    if shebang_lang:
+                        is_code = True
+                        ext = None  # 标记为 shebang 检测
+
                 if not is_code and not is_config:
                     local_skipped += 1
                     continue
 
                 try:
-                    language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
+                    if ext is None:
+                        # shebang 检测到的语言
+                        language = shebang_lang
+                    else:
+                        language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
                     size_bytes = os.path.getsize(abs_path)
                     line_count = _count_lines(abs_path)
 
@@ -395,12 +441,22 @@ def _scan_files(repo_path: str, max_files: int = 5000) -> tuple[list[FileInfo], 
                 is_config = ext in CONFIG_EXTENSIONS
                 is_code = ext in CODE_EXTENSIONS
 
+                # 无扩展名文件：尝试 shebang 检测
+                shebang_lang = None
+                if not is_code and not is_config and not ext:
+                    shebang_lang = _detect_language_by_shebang(abs_path)
+                    if shebang_lang:
+                        is_code = True
+
                 if not is_code and not is_config:
                     skipped += 1
                     continue
 
                 try:
-                    language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
+                    if shebang_lang:
+                        language = shebang_lang
+                    else:
+                        language = EXTENSION_TO_LANGUAGE.get(ext, "unknown")
                     size_bytes = os.path.getsize(abs_path)
                     line_count = _count_lines(abs_path)
 

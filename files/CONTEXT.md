@@ -1507,3 +1507,65 @@
 
 **下一步方向**：Sprint 3 — 大项目扩展性优化（图构造 + 分层渲染 + 差分扫描）
 
+---
+
+### 任务 M3-1 — 2026-03-25 parse 阶段性能优化
+
+**目标**：优化 parse 阶段性能，解决 scan_repo 超时问题（superpowers 项目 21.72s → < 10s 目标）
+
+**完成情况**：✅ 全面完成，大幅超出预期
+
+**背景问题**：
+- superpowers 项目（62 个文件）扫描 21.72s，其中 parse 18.84s（87%）
+- 60/62 文件退化到正则 fallback（tree-sitter-language-pack 未安装）
+- 50 个 bash 脚本无 tree-sitter grammar 支持
+- 8 个 JS + 2 个 TS 中只有 2 个 native 解析成功（.cjs 未识别）
+- 平均解析置信度 0.55（目标 ≥ 0.8）
+
+**三步优化**：
+
+1. **tree-sitter-language-pack 安装 + bash grammar 启用**
+   - 安装 tree-sitter-language-pack 1.1.4（包含 bash/JS/TS 等多语言 grammar）
+   - LANG_CONFIG 中已有 bash 条目，验证可正确解析函数定义和 command
+   - 修复 params_field=None 时的 TypeError（bash 等语言无参数字段）
+
+2. **JS/TS 扩展名修复 + shebang 检测**
+   - 新增 `.cjs` → javascript, `.mjs` → javascript, `.mts` → typescript 映射
+   - 新增 shebang 检测：无扩展名文件通过 `#!/bin/bash` 等自动识别语言
+   - shebang 支持 bash/python/ruby/perl/node 五种语言
+   - 两处文件扫描路径（串行/并行）均已添加 shebang 检测
+
+3. **并行解析（ThreadPoolExecutor 替代 asyncio.gather）**
+   - 原 parse_all 使用 asyncio.gather，但 parse_file 全部是同步工作，无实际并行
+   - 改用 ThreadPoolExecutor（max_workers=min(cpu_count, 8)）
+   - tree-sitter 是 C 扩展释放 GIL，ThreadPoolExecutor 实现真正并行
+   - 单文件超时 5 秒保护，超时退化到基础结果
+
+**验收对比数据**（详见 test_results/superpowers_perf.json）：
+
+| 指标 | 优化前 | 优化后 | 改善 |
+|------|--------|--------|------|
+| 总扫描时间 | 21.72s | 0.08s | **271x** |
+| parse 阶段 | 18.84s | 0.08s | **235x** |
+| Native 解析文件数 | 2/62 (3.2%) | 66/66 (100%) | 全部 native |
+| 正则 fallback | 60 | 0 | 归零 |
+| 平均置信度 | 0.55 | 1.0 | **+0.45** |
+| 解析出的函数数 | N/A | 350 | — |
+
+**测试**：
+- 新增 27 个测试（test_parse_perf.py）覆盖三步优化
+- 全量 pytest: 514 passed, 25 skipped, 0 failed
+
+**修改文件清单**：
+- 修改：`mcp-server/src/parsers/ast_parser.py`（并行解析 + params_field None 修复）
+- 修改：`mcp-server/src/parsers/repo_cloner.py`（.cjs/.mjs/.mts 映射 + shebang 检测）
+- 新建：`mcp-server/tests/test_parse_perf.py`（27 个测试）
+- 新建：`mcp-server/test_results/superpowers_perf.json`（性能对比数据）
+
+**后续任务（本次不做）**：
+- 添加更多语言 grammar：Go、Rust、Java、C/C++（已在 tree-sitter-language-pack 中，LANG_CONFIG 已有）
+- scan_repo 的 MCP progress notification 支持
+- 大文件跳过策略（单文件 > 10000 行时用摘要模式）
+- 缓存机制：同一 commit 不重复解析
+- bash command 节点的 import/call 分类优化（当前 command 全部归为 import）
+

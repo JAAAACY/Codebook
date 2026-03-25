@@ -497,7 +497,8 @@ class TestTreeSitterHealthCheck:
         assert len(hc._available) == 0
 
     @patch("src.parsers.ast_parser._tree_sitter_module", None)
-    def test_unavailable_when_module_missing(self):
+    @patch("src.parsers.ast_parser._try_import_tree_sitter")  # 阻止延迟重试
+    def test_unavailable_when_module_missing(self, mock_retry):
         hc = TreeSitterHealthCheck()
         assert hc.is_available() is False
         assert hc.is_available("python") is False
