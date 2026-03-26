@@ -121,7 +121,11 @@ class TreeSitterHealthCheck:
         self._resolved_names: dict[str, str] = {}
 
     def _check_global(self) -> bool:
-        """检测 tree-sitter 模块是否整体可用。"""
+        """检测 tree-sitter 模块是否整体可用。
+
+        如果探测失败（如缓存损坏 / checksum mismatch），
+        自动清理缓存并重试一次，实现运行时自愈。
+        """
         if _tree_sitter_module is None:
             # 延迟重试：进程启动时可能还没装好
             _try_import_tree_sitter()
@@ -134,6 +138,20 @@ class TreeSitterHealthCheck:
             return tree.root_node is not None
         except Exception as e:
             logger.warning("tree_sitter.probe_failed", error=str(e))
+
+            # 自动修复：清理缓存后重试一次
+            try:
+                if hasattr(_tree_sitter_module, "clean_cache"):
+                    _tree_sitter_module.clean_cache()
+                    logger.info("tree_sitter.cache_auto_cleaned")
+                    parser = _tree_sitter_module.get_parser("python")
+                    tree = parser.parse(b"def test(): pass")
+                    if tree.root_node is not None:
+                        logger.info("tree_sitter.auto_recovered")
+                        return True
+            except Exception as e2:
+                logger.warning("tree_sitter.auto_recover_failed", error=str(e2))
+
             return False
 
     def _try_get_parser(self, language: str):
