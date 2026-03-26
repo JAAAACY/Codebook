@@ -171,12 +171,12 @@ async def test_ask_about_returns_placeholder():
 
 
 def test_mcp_server_has_five_tools():
-    """MCP Server 注册了 7 个 tool。"""
+    """MCP Server 注册了 8 个 tool。"""
     from src.server import mcp
 
     tools = mcp._tool_manager._tools
     tool_names = set(tools.keys())
-    expected = {"scan_repo", "read_chapter", "diagnose", "ask_about", "codegen", "term_correct", "memory_feedback"}
+    expected = {"scan_repo", "read_chapter", "diagnose", "ask_about", "codegen", "term_correct", "memory_feedback", "codebook"}
     assert expected == tool_names, f"Expected {expected}, got {tool_names}"
 
 

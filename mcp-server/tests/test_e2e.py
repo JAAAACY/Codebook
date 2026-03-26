@@ -619,11 +619,11 @@ class TestMCPToolRegistration:
     """验证 MCP Server 的 tool 注册和元数据。"""
 
     def test_all_tools_registered(self):
-        """MCP Server 注册了 7 个 tool (scan/read/diagnose/codegen/ask/term_correct/memory_feedback)。"""
+        """MCP Server 注册了 8 个 tool (scan/read/diagnose/codegen/ask/term_correct/memory_feedback/codebook)。"""
         from src.server import mcp
 
         tools = mcp._tool_manager._tools
-        expected = {"scan_repo", "read_chapter", "diagnose", "codegen", "ask_about", "term_correct", "memory_feedback"}
+        expected = {"scan_repo", "read_chapter", "diagnose", "codegen", "ask_about", "term_correct", "memory_feedback", "codebook"}
         actual = set(tools.keys())
         assert expected == actual, f"Expected {expected}, got {actual}"
 

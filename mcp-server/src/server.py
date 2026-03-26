@@ -16,6 +16,7 @@ from src.tools.read_chapter import read_chapter as _read_chapter
 from src.tools.scan_repo import scan_repo as _scan_repo
 from src.tools.term_correct import term_correct as _term_correct
 from src.tools.memory_feedback import memory_feedback as _memory_feedback
+from src.tools.codebook_explore import codebook_explore as _codebook_explore
 
 # ── 日志配置 ──────────────────────────────────────────────
 structlog.configure(
@@ -213,6 +214,54 @@ async def memory_feedback(
         answer_summary=answer_summary,
         confidence=confidence,
         follow_ups_used=follow_ups_used or [],
+    )
+
+
+@mcp.tool()
+async def codebook(
+    repo_url: str = "",
+    query: str = "",
+    code_snippet: str = "",
+    role: Role = Role.pm,
+) -> dict:
+    """一键理解任何代码项目 — CodeBook 的主入口。
+
+    只需提供仓库链接、代码片段或自然语言问题，CodeBook 自动完成全链路分析：
+    扫描项目架构 → 深入核心模块 → 诊断问题/生成健康报告。
+
+    **什么时候该调用这个工具：**
+    - 用户给了一个 GitHub / Git 仓库链接，想了解项目
+    - 用户粘贴了一段代码，问「这是干什么的」「帮我看看」
+    - 用户说「帮我分析/理解/看看这个项目/代码/模块」
+    - 用户问了一个关于代码的问题（如「登录超时是怎么回事」）
+    - 用户提到了 CodeBook / codebook
+    - 用户想了解项目架构、模块关系、调用链、代码定位
+    - 用户说「扫描」「解析」「诊断」「看看源码」「代码在哪」
+
+    **触发关键词（任意匹配即可调用）：**
+    codebook, 扫描代码, 分析项目, 理解代码, 看看代码, 代码架构,
+    模块关系, 调用链, 定位问题, 帮我看看这个函数, 这段代码干什么,
+    scan, analyze, understand, explain code, architecture, debug,
+    trace, 源码, 解析, repo, 仓库
+
+    Args:
+        repo_url: Git 仓库地址（HTTPS 格式）。给了链接就能完整分析。
+        query: 自然语言问题或意图（可选）。有问题时自动聚焦相关模块。
+        code_snippet: 代码片段（可选）。没有 repo_url 时用这个做快速分析。
+        role: 目标角色。pm = 产品视角，ceo = 战略视角，qa = 质量视角。
+    """
+    logger.info(
+        "tool.codebook",
+        has_url=bool(repo_url),
+        has_query=bool(query),
+        has_snippet=bool(code_snippet),
+        role=role.value,
+    )
+    return await _codebook_explore(
+        repo_url=repo_url,
+        query=query,
+        code_snippet=code_snippet,
+        role=role.value,
     )
 
 
