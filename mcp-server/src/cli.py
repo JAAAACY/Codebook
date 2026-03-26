@@ -378,8 +378,84 @@ def _write_config(target: "ToolTarget", data: dict):
 
 # ── 核心命令 ──────────────────────────────────────────
 
+def _get_tree_sitter_cache_dir() -> Path | None:
+    """获取 tree-sitter-language-pack 的缓存目录。"""
+    try:
+        from tree_sitter_language_pack import cache_dir
+        return Path(cache_dir())
+    except Exception:
+        pass
+    # 手动推测常见缓存路径
+    system = platform.system()
+    home = Path.home()
+    candidates = []
+    if system == "Darwin":
+        candidates.append(home / "Library" / "Caches" / "tree-sitter-language-pack")
+    elif system == "Windows":
+        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        candidates.append(local / "tree-sitter-language-pack" / "Cache")
+    else:
+        candidates.append(home / ".cache" / "tree-sitter-language-pack")
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def _clean_tree_sitter_cache(silent: bool = False) -> bool:
+    """清理 tree-sitter-language-pack 的 grammar 缓存。"""
+    # 方式 1：用包自带的 clean_cache()
+    try:
+        from tree_sitter_language_pack import clean_cache
+        clean_cache()
+        if not silent:
+            print(f"  ✓ tree-sitter 缓存已清理（via clean_cache）")
+        return True
+    except Exception:
+        pass
+
+    # 方式 2：手动删除缓存目录
+    cache = _get_tree_sitter_cache_dir()
+    if cache and cache.exists():
+        shutil.rmtree(cache, ignore_errors=True)
+        if not silent:
+            print(f"  ✓ tree-sitter 缓存已清理: {cache}")
+        return True
+
+    return False
+
+
+def _probe_tree_sitter_grammars(tslp) -> tuple[int, list[str]]:
+    """逐语言探测 tree-sitter grammar 可用性。返回 (ok_count, fail_langs)。"""
+    test_languages = {
+        "python":     b"def hello(): pass",
+        "javascript": b"function hello() {}",
+        "typescript": b"function hello(): void {}",
+        "bash":       b"function hello() { echo hi; }",
+        "go":         b"package main\nfunc hello() {}",
+        "rust":       b"fn hello() {}",
+        "java":       b"class A { void hello() {} }",
+    }
+    ok_count = 0
+    fail_langs = []
+    for lang, probe_code in test_languages.items():
+        try:
+            parser = tslp.get_parser(lang)
+            tree = parser.parse(probe_code)
+            if tree.root_node is not None:
+                ok_count += 1
+            else:
+                fail_langs.append(lang)
+        except Exception:
+            fail_langs.append(lang)
+    return ok_count, fail_langs
+
+
 def _verify_tree_sitter():
-    """安装后验证 tree-sitter 解析能力，检测降级风险。"""
+    """安装后验证 tree-sitter 解析能力，检测降级风险。
+
+    如果 grammar 加载失败（如 checksum mismatch），自动清缓存并重试。
+    """
     print()
     print(f"  🔍 验证解析引擎")
     print(f"  {'─' * 40}")
@@ -393,35 +469,26 @@ def _verify_tree_sitter():
         print(f"  {'─' * 40}")
         return False
 
-    # 逐语言探测
-    test_languages = {
-        "python":     b"def hello(): pass",
-        "javascript": b"function hello() {}",
-        "typescript":  b"function hello(): void {}",
-        "bash":       b"function hello() { echo hi; }",
-        "go":         b"package main\nfunc hello() {}",
-        "rust":       b"fn hello() {}",
-        "java":       b"class A { void hello() {} }",
-    }
-    ok_count = 0
-    fail_langs = []
+    # 第一轮探测
+    ok_count, fail_langs = _probe_tree_sitter_grammars(tslp)
 
-    for lang, probe_code in test_languages.items():
-        try:
-            parser = tslp.get_parser(lang)
-            tree = parser.parse(probe_code)
-            if tree.root_node is not None:
-                ok_count += 1
-            else:
-                fail_langs.append(lang)
-        except Exception:
-            fail_langs.append(lang)
+    # 如果有失败，可能是缓存损坏（checksum mismatch），自动清缓存重试
+    if fail_langs:
+        print(f"  ⚠ {len(fail_langs)} 种语言 grammar 加载失败，尝试清理缓存...")
+        if _clean_tree_sitter_cache(silent=True):
+            # 重新导入模块以拿到新的 grammar
+            import importlib
+            importlib.reload(tslp)
+            ok_count, fail_langs = _probe_tree_sitter_grammars(tslp)
+            if not fail_langs:
+                print(f"  ✓ 缓存清理后恢复正常！")
 
     if not fail_langs:
         print(f"  ✓ tree-sitter 全部 {ok_count} 种语言可用（置信度 1.0）")
     else:
-        print(f"  ✓ tree-sitter {ok_count}/{len(test_languages)} 种语言可用")
+        print(f"  ✓ tree-sitter {ok_count}/{ok_count + len(fail_langs)} 种语言可用")
         print(f"  ⚠ 以下语言将使用正则 fallback: {', '.join(fail_langs)}")
+        print(f"    修复: pip install tree-sitter-language-pack --force-reinstall --no-cache-dir")
 
     print(f"  {'─' * 40}")
     return len(fail_langs) == 0
@@ -560,7 +627,21 @@ def _uninstall():
             print(f"  ✓ {target.display_name:<20} 已移除")
             removed += 1
 
-    if removed == 0:
+    # 清理 tree-sitter grammar 缓存
+    cache_dir = _get_tree_sitter_cache_dir()
+    if cache_dir and cache_dir.exists():
+        cache_size_mb = sum(f.stat().st_size for f in cache_dir.rglob("*") if f.is_file()) / (1024 * 1024)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        print(f"  ✓ {'tree-sitter 缓存':<20} 已清理（{cache_size_mb:.1f} MB）")
+
+    # 清理 CodeBook 项目记忆
+    memory_dir = Path.home() / ".codebook"
+    if memory_dir.exists():
+        memory_size_mb = sum(f.stat().st_size for f in memory_dir.rglob("*") if f.is_file()) / (1024 * 1024)
+        shutil.rmtree(memory_dir, ignore_errors=True)
+        print(f"  ✓ {'项目记忆':<20} 已清理（{memory_size_mb:.1f} MB）")
+
+    if removed == 0 and not (cache_dir and cache_dir.exists()):
         print(f"  ◻ 未找到任何已配置的 CodeBook 实例")
     else:
         print(f"  {'─' * 40}")
@@ -616,13 +697,24 @@ def _doctor():
     git_ok = shutil.which("git") is not None
     print(f"  {'✓' if git_ok else '✗'} Git{'':17} {'OK' if git_ok else '未安装'}")
 
-    # tree-sitter
+    # tree-sitter（不仅检查 import，还检查 grammar 是否真正可加载）
+    ts_ok = False
     try:
-        import tree_sitter_language_pack
+        import tree_sitter_language_pack as tslp
+        tslp.get_language("python")
         ts_ok = True
     except ImportError:
-        ts_ok = False
-    print(f"  {'✓' if ts_ok else '✗'} tree-sitter{'':10} {'OK' if ts_ok else '未安装：pip install tree-sitter-language-pack'}")
+        pass
+    except Exception as e:
+        # import 成功但 grammar 加载失败（如 checksum mismatch）
+        err_name = type(e).__name__
+        print(f"  ✗ tree-sitter{'':8} 已安装但 grammar 损坏（{err_name}）")
+        print(f"    修复: python3 -c \"from tree_sitter_language_pack import clean_cache; clean_cache()\"")
+        print(f"          pip install tree-sitter-language-pack --upgrade --no-cache-dir")
+    if ts_ok:
+        print(f"  ✓ tree-sitter{'':8} OK")
+    elif 'tslp' not in dir():
+        print(f"  ✗ tree-sitter{'':8} 未安装：pip install tree-sitter-language-pack")
 
     # MCP
     try:
