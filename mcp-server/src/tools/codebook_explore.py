@@ -22,6 +22,7 @@ from src.tools.scan_repo import scan_repo as _scan_repo
 from src.tools.read_chapter import read_chapter as _read_chapter
 from src.tools.diagnose import diagnose as _diagnose
 from src.tools._repo_cache import repo_cache
+from src.tools.blueprint_renderer import save_blueprint
 
 logger = structlog.get_logger()
 
@@ -381,6 +382,21 @@ async def codebook_explore(
 
     total_time = round(time.time() - total_start, 2)
     result["total_time_seconds"] = total_time
+
+    # ══════════════════════════════════════════════════════
+    # 自动生成 HTML 蓝图文件
+    # ══════════════════════════════════════════════════════
+    try:
+        blueprint_path = save_blueprint(
+            report_data=result["report_data"],
+            repo_url=repo_url,
+            total_time=total_time,
+        )
+        result["blueprint_path"] = blueprint_path
+        logger.info("codebook_explore.blueprint_saved", path=blueprint_path)
+    except Exception as e:
+        logger.warning("codebook_explore.blueprint_save_failed", error=str(e))
+        result["blueprint_path"] = None
 
     logger.info(
         "codebook_explore.done",

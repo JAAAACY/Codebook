@@ -122,7 +122,7 @@ class TestCodebookExplore:
 
     @pytest.mark.asyncio
     async def test_full_pipeline_with_local_path(self, mini_project_path):
-        """完整链路：本地路径 → scan → chapters → diagnose。"""
+        """完整链路：本地路径 → scan → chapters → diagnose → 蓝图文件。"""
         result = await codebook_explore(
             repo_url=mini_project_path,
             role="pm",
@@ -153,6 +153,13 @@ class TestCodebookExplore:
         assert "report_data" in result
         report = result["report_data"]
         assert len(report["module_cards"]) > 0
+
+        # 蓝图 HTML 文件自动生成
+        assert "blueprint_path" in result
+        assert result["blueprint_path"] is not None
+        import os
+        assert os.path.isfile(result["blueprint_path"])
+        assert result["blueprint_path"].endswith(".html")
 
     @pytest.mark.asyncio
     async def test_query_driven_pipeline(self, mini_project_path):
@@ -215,3 +222,69 @@ class TestReportData:
         if selected:
             has_chapter = any("chapter" in c for c in selected)
             assert has_chapter, "至少一个被选中的模块应有 chapter 数据"
+
+
+# ── 蓝图渲染测试 ──────────────────────────────────────────
+
+
+class TestBlueprintRenderer:
+    """验证 HTML 蓝图文件生成。"""
+
+    @pytest.mark.asyncio
+    async def test_blueprint_html_contains_key_elements(self, mini_project_path):
+        """生成的 HTML 应包含关键元素。"""
+        result = await codebook_explore(
+            repo_url=mini_project_path,
+            role="pm",
+        )
+
+        path = result.get("blueprint_path")
+        assert path is not None
+
+        with open(path, encoding="utf-8") as f:
+            html_content = f.read()
+
+        # 基本结构
+        assert "<!DOCTYPE html>" in html_content
+        assert "CodeBook" in html_content
+        assert "Blueprint Report" in html_content
+
+        # 交互功能
+        assert "filterModules" in html_content
+        assert "toggleCard" in html_content
+
+        # Mermaid 支持
+        assert "mermaid" in html_content
+
+        # 包含模块卡片
+        assert "module-card" in html_content
+
+    def test_render_blueprint_html_standalone(self):
+        """纯函数测试：给定 report_data 能生成有效 HTML。"""
+        from src.tools.blueprint_renderer import render_blueprint_html
+
+        report_data = {
+            "overview": {
+                "project_overview": "测试项目概览",
+                "stats": {"files": 10, "code_files": 8, "modules": 2, "functions": 20, "total_lines": 500, "languages": {"python": 8}, "parse_quality": {"native": 8, "full": 0, "partial": 0, "basic": 0, "failed": 0}, "avg_parse_confidence": 1.0},
+                "mermaid_diagram": "graph TD\n  A-->B",
+                "parse_warnings": [],
+            },
+            "module_cards": [
+                {"name": "auth", "title": "认证模块", "body": "处理登录", "health": "green", "paths": [], "depends_on": [], "used_by": [], "is_selected": True},
+                {"name": "db", "title": "数据库", "body": "数据存储", "health": "yellow", "paths": [], "depends_on": [], "used_by": ["auth"], "is_selected": False},
+            ],
+            "health_overview": None,
+            "selection_strategy": "topology_driven",
+            "query": "",
+            "role": "pm",
+        }
+
+        html_content = render_blueprint_html(report_data, repo_url="https://github.com/test/repo", total_time=1.5)
+
+        assert "<!DOCTYPE html>" in html_content
+        assert "test/repo" in html_content
+        assert "auth" in html_content
+        assert "db" in html_content
+        assert "Needs attention" in html_content  # yellow 模块的 badge
+        assert "All (2)" in html_content
