@@ -26,11 +26,13 @@ from src.parsers.ast_parser import (
 
 
 def _tree_sitter_available() -> bool:
-    """Check if tree-sitter-language-pack is installed and functional."""
+    """Check if tree-sitter-language-pack is installed AND grammars actually load."""
     try:
-        import tree_sitter_language_pack  # noqa: F401
+        from tree_sitter_language_pack import get_language
+        # Actually try to load a grammar — import alone doesn't guarantee it works
+        get_language("python")
         return True
-    except ImportError:
+    except Exception:
         return False
 
 
