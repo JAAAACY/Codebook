@@ -219,6 +219,38 @@ async def memory_feedback(
 # ── 入口 ─────────────────────────────────────────────────
 
 
+def _startup_health_check():
+    """启动时检查 tree-sitter 可用性，缓存损坏时自动修复。"""
+    try:
+        from tree_sitter_language_pack import get_language
+        get_language("python")
+        logger.info("tree_sitter.startup_ok")
+        return
+    except ImportError:
+        logger.warning("tree_sitter.not_installed",
+                       msg="tree-sitter-language-pack 未安装，将使用正则 fallback")
+        return
+    except Exception as e:
+        logger.warning("tree_sitter.startup_failed", error=str(e),
+                       msg="grammar 加载失败，尝试清理缓存...")
+
+    # 尝试自动修复：清缓存后重试
+    try:
+        from tree_sitter_language_pack import clean_cache
+        clean_cache()
+        logger.info("tree_sitter.cache_cleaned")
+
+        # 重试
+        from tree_sitter_language_pack import get_language
+        get_language("python")
+        logger.info("tree_sitter.startup_recovered",
+                     msg="缓存清理后恢复正常")
+    except Exception as e2:
+        logger.error("tree_sitter.startup_unrecoverable", error=str(e2),
+                      msg="自动修复失败，请手动执行: "
+                          "pip install tree-sitter-language-pack --force-reinstall --no-cache-dir")
+
+
 def main():
     """启动 CodeBook MCP Server。"""
     logger.info(
@@ -226,6 +258,7 @@ def main():
         name=settings.app_name,
         version=settings.app_version,
     )
+    _startup_health_check()
     mcp.run(transport="stdio")
 
 
