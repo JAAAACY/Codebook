@@ -174,3 +174,48 @@ class TestDetectTargets:
         targets = _detect_targets()
         names = {t.name for t in targets}
         assert expected.issubset(names), f"Missing targets: {expected - names}"
+
+
+class TestInstallRoundTrip:
+    """验证 _install() 对各目标的写入->读回一致性。"""
+
+    def test_claude_code_install_writes_config(self, tmp_path, monkeypatch):
+        """claude-code 安装应写入 ~/.claude/.mcp.json 的 mcpServers 键。"""
+        fake_mcp_json = tmp_path / ".claude" / ".mcp.json"
+        fake_mcp_json.parent.mkdir(parents=True)
+
+        config = _read_json(fake_mcp_json)
+        mcp_payload = {
+            "command": "/usr/bin/python3",
+            "args": ["-m", "src.server"],
+            "cwd": "/some/path",
+        }
+        _set_nested(config, "mcpServers", "codebook", mcp_payload)
+        _write_json(fake_mcp_json, config)
+
+        # 读回验证
+        result = _read_json(fake_mcp_json)
+        servers = _get_nested(result, "mcpServers")
+        assert servers is not None
+        assert "codebook" in servers
+        assert servers["codebook"]["command"] == "/usr/bin/python3"
+        assert servers["codebook"]["args"] == ["-m", "src.server"]
+
+    def test_install_preserves_existing_servers(self, tmp_path):
+        """安装 codebook 不应覆盖已有的其他 MCP server 配置。"""
+        fake_mcp_json = tmp_path / ".mcp.json"
+        # 预先写入一个已有的 server
+        existing = {"mcpServers": {"other-server": {"command": "other", "args": []}}}
+        _write_json(fake_mcp_json, existing)
+
+        # 添加 codebook
+        config = _read_json(fake_mcp_json)
+        _set_nested(config, "mcpServers", "codebook", {"command": "python3", "args": ["-m", "src.server"]})
+        _write_json(fake_mcp_json, config)
+
+        # 验证两个 server 都在
+        result = _read_json(fake_mcp_json)
+        servers = _get_nested(result, "mcpServers")
+        assert "other-server" in servers
+        assert "codebook" in servers
+        assert servers["other-server"]["command"] == "other"
