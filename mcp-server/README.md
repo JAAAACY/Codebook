@@ -17,7 +17,9 @@ python3 -m src.server
 codebook
 ```
 
-## 在 Claude Desktop 中配置
+## 配置 MCP 客户端
+
+### Claude Desktop
 
 编辑 `~/Library/Application Support/Claude/claude_desktop_config.json`：
 
@@ -25,12 +27,16 @@ codebook
 {
   "mcpServers": {
     "codebook": {
-      "command": "python3",
-      "args": ["-m", "src.server"],
-      "cwd": "/path/to/mcp-server"
+      "command": "codebook-server"
     }
   }
 }
+```
+
+### Claude Code (CLI)
+
+```bash
+claude mcp add codebook -- codebook-server
 ```
 
 ## 可用工具
