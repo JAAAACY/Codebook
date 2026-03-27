@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import src.cli as cli_module
 from src.cli import (
     _read_json,
     _write_json,
@@ -219,3 +220,15 @@ class TestInstallRoundTrip:
         assert "other-server" in servers
         assert "codebook" in servers
         assert servers["other-server"]["command"] == "other"
+
+
+class TestCliMainDispatch:
+    """cli_main() 安装分发不应有 CLI_TARGETS 特殊路径。"""
+
+    def test_no_install_via_cli_function(self):
+        """_install_via_cli 应已删除。"""
+        assert not hasattr(cli_module, "_install_via_cli")
+
+    def test_no_install_claude_code_function(self):
+        """_install_claude_code 应已删除。"""
+        assert not hasattr(cli_module, "_install_claude_code")

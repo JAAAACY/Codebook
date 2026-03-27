@@ -560,65 +560,6 @@ def _install(target_filter: str | None = None):
     return True
 
 
-def _install_claude_code():
-    """通过 claude mcp add 安装到 Claude Code。"""
-    print(f"\n  ⚡ 正在配置 Claude Code...")
-
-    mcp_config = _build_mcp_config()
-    cmd = [
-        "claude", "mcp", "add", SERVER_NAME,
-        "--command", mcp_config["command"],
-        "--args", json.dumps(mcp_config["args"]),
-        "--cwd", mcp_config["cwd"],
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if result.returncode == 0:
-            print(f"  ✓ Claude Code 配置完成 ✅")
-            return True
-        else:
-            print(f"  ✗ Claude Code 配置失败: {result.stderr.strip()}")
-            return False
-    except FileNotFoundError:
-        print(f"  ✗ 未找到 claude CLI，请先安装 Claude Code")
-        print(f"    npm install -g @anthropic-ai/claude-code")
-        return False
-    except subprocess.TimeoutExpired:
-        print(f"  ✗ Claude Code 配置超时")
-        return False
-
-
-def _install_via_cli(cli_name: str, display_name: str, install_hint: str = ""):
-    """通用：通过工具自带的 `<cli> mcp add` 安装。"""
-    print(f"\n  ⚡ 正在配置 {display_name}...")
-
-    mcp_config = _build_mcp_config()
-    cmd = [
-        cli_name, "mcp", "add", SERVER_NAME,
-        "--command", mcp_config["command"],
-        "--args", json.dumps(mcp_config["args"]),
-        "--cwd", mcp_config["cwd"],
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if result.returncode == 0:
-            print(f"  ✓ {display_name} 配置完成 ✅")
-            return True
-        else:
-            print(f"  ✗ {display_name} 配置失败: {result.stderr.strip()}")
-            return False
-    except FileNotFoundError:
-        print(f"  ✗ 未找到 {cli_name} CLI，请先安装 {display_name}")
-        if install_hint:
-            print(f"    {install_hint}")
-        return False
-    except subprocess.TimeoutExpired:
-        print(f"  ✗ {display_name} 配置超时")
-        return False
-
-
 def _uninstall():
     """从所有已配置的工具中移除 CodeBook。"""
     targets = _detect_targets()
@@ -905,21 +846,7 @@ def cli_main():
         if cn_mode:
             _install_cn_deps()
 
-        # 有些工具优先用自带 CLI 安装，也可以直接写配置文件
-        CLI_TARGETS = {
-            "claude-code": ("claude", "Claude Code", "npm install -g @anthropic-ai/claude-code"),
-            "qwen":        ("qwen", "Qwen Code", "pip install qwen-code"),
-            "codex":       ("codex", "Codex CLI", "npm install -g @openai/codex"),
-            "gemini":      ("gemini", "Gemini CLI", "npm install -g @anthropic-ai/gemini-cli"),
-        }
-        if target in CLI_TARGETS:
-            cli_name, display, hint = CLI_TARGETS[target]
-            # 先尝试 CLI 安装，失败则回退到直接写配置文件
-            if not _install_via_cli(cli_name, display, hint):
-                print(f"  ℹ  回退到直接写入配置文件...")
-                _install(target_filter=target)
-        else:
-            _install(target_filter=target)
+        _install(target_filter=target)
 
     elif command == "uninstall":
         _uninstall()
