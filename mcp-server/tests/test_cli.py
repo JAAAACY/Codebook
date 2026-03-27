@@ -11,12 +11,18 @@ import pytest
 
 import src.cli as cli_module
 from src.cli import (
+    _build_mcp_config,
+    _detect_targets,
+    _get_nested,
     _read_json,
-    _write_json,
     _read_toml,
-    _write_toml,
     _read_yaml,
+    _remove_nested,
+    _set_nested,
+    _write_json,
+    _write_toml,
     _write_yaml,
+    ToolTarget,
 )
 
 
@@ -149,8 +155,6 @@ class TestYamlRoundTrip:
         assert result["description"] == data["description"]
 
 
-from src.cli import _detect_targets, _build_mcp_config, _set_nested, _get_nested, ToolTarget
-
 
 class TestDetectTargets:
     """_detect_targets() 应返回所有支持的目标，包括 claude-code。"""
@@ -180,7 +184,7 @@ class TestDetectTargets:
 class TestInstallRoundTrip:
     """验证 _install() 对各目标的写入->读回一致性。"""
 
-    def test_claude_code_install_writes_config(self, tmp_path, monkeypatch):
+    def test_claude_code_install_writes_config(self, tmp_path):
         """claude-code 安装应写入 ~/.claude/.mcp.json 的 mcpServers 键。"""
         fake_mcp_json = tmp_path / ".claude" / ".mcp.json"
         fake_mcp_json.parent.mkdir(parents=True)
@@ -248,8 +252,6 @@ class TestUninstallCoverage:
     """_uninstall() 应覆盖所有目标，包括 claude-code。"""
 
     def test_uninstall_removes_codebook_from_json(self, tmp_path):
-        from src.cli import _read_json, _write_json, _remove_nested
-
         fake_config = tmp_path / ".mcp.json"
         data = {"mcpServers": {"codebook": {"command": "python3"}, "other": {"command": "other"}}}
         _write_json(fake_config, data)
