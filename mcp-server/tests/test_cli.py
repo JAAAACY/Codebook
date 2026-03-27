@@ -232,3 +232,13 @@ class TestCliMainDispatch:
     def test_no_install_claude_code_function(self):
         """_install_claude_code 应已删除。"""
         assert not hasattr(cli_module, "_install_claude_code")
+
+
+class TestStatusConsistency:
+    """_status() 应统一通过配置文件检查所有目标，不使用 subprocess。"""
+
+    def test_status_no_subprocess_for_claude_code(self):
+        """_status() 源码中不应包含 subprocess 调用。"""
+        import inspect
+        source = inspect.getsource(cli_module._status)
+        assert "subprocess" not in source, "_status() should not call subprocess for any target"

@@ -618,18 +618,6 @@ def _status():
         else:
             print(f"  ○ {target.display_name:<20} 未配置")
 
-    # Claude Code 特殊检查
-    try:
-        result = subprocess.run(
-            ["claude", "mcp", "list"], capture_output=True, text=True, timeout=5,
-        )
-        if SERVER_NAME in result.stdout:
-            print(f"  ✓ {'Claude Code':<20} 已配置 ✅")
-        else:
-            print(f"  ○ {'Claude Code':<20} 未配置")
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        print(f"  ◻ {'Claude Code':<20} CLI 未安装")
-
     print()
 
 
