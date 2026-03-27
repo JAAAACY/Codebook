@@ -146,3 +146,31 @@ class TestYamlRoundTrip:
         result = _read_yaml(path)
         assert result["url"] == data["url"]
         assert result["description"] == data["description"]
+
+
+from src.cli import _detect_targets, _build_mcp_config, _set_nested, _get_nested, ToolTarget
+
+
+class TestDetectTargets:
+    """_detect_targets() 应返回所有支持的目标，包括 claude-code。"""
+
+    def test_claude_code_in_targets(self):
+        targets = _detect_targets()
+        names = [t.name for t in targets]
+        assert "claude-code" in names
+
+    def test_claude_code_config_path(self):
+        targets = _detect_targets()
+        cc = next(t for t in targets if t.name == "claude-code")
+        assert cc.config_path == Path.home() / ".claude" / ".mcp.json"
+        assert cc.key_path == "mcpServers"
+
+    def test_all_documented_targets_present(self):
+        """USAGE 文档中列出的所有目标都应在 _detect_targets() 中有定义。"""
+        expected = {
+            "claude-desktop", "claude-code", "cursor", "windsurf",
+            "vscode", "qwen", "codex", "gemini", "trae", "continue",
+        }
+        targets = _detect_targets()
+        names = {t.name for t in targets}
+        assert expected.issubset(names), f"Missing targets: {expected - names}"

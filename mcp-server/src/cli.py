@@ -164,6 +164,15 @@ def _detect_targets() -> list[ToolTarget]:
         key_path="mcpServers",  # YAML 顶层键
     ))
 
+    # -- Claude Code CLI --
+    claude_code_config = home / ".claude" / ".mcp.json"
+    targets.append(ToolTarget(
+        name="claude-code",
+        display_name="Claude Code",
+        config_path=claude_code_config,
+        key_path="mcpServers",
+    ))
+
     return targets
 
 
