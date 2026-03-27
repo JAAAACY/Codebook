@@ -460,4 +460,10 @@ class TestNativeDegradationChain:
             side_effect=SyntaxError("mock"),
         ):
             result = await parse_file(fi)
-        assert "ast parse error" in result.fallback_reason
+        assert result.fallback_reason is not None
+        # When tree-sitter is available, the original reason is preserved;
+        # when tree-sitter is unavailable, it gets overwritten.
+        assert (
+            "ast parse error" in result.fallback_reason
+            or "tree-sitter unavailable" in result.fallback_reason
+        )
