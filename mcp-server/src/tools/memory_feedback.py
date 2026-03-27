@@ -59,7 +59,7 @@ async def memory_feedback(
         }
 
     # Get repo_url from cache context
-    repo_url = getattr(ctx.clone_result, "repo_url", None)
+    repo_url = ctx.repo_url
     if not repo_url:
         return {
             "status": "error",

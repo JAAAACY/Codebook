@@ -600,7 +600,7 @@ async def diagnose(module_name: str = "all", role: str = "pm", query: str = "") 
 
     # Persist diagnosis to ProjectMemory for each matched module
     try:
-        repo_url = getattr(ctx.clone_result, "repo_url", None) or ""
+        repo_url = ctx.repo_url or ""
         if repo_url:
             memory = ProjectMemory(repo_url)
             # Extract diagnosis summary from context and locations

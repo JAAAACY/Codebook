@@ -412,7 +412,7 @@ def assemble_context(
     # Initialize ProjectMemory if repo_url available
     memory = None
     try:
-        repo_url = getattr(ctx.clone_result, "repo_url", None) or ""
+        repo_url = ctx.repo_url or ""
         if repo_url:
             memory = ProjectMemory(repo_url)
     except Exception as e:

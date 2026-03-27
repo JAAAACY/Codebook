@@ -60,7 +60,7 @@ class TestDiagnosisPersistence:
         mock_module = ModuleGroup(name="auth", dir_path="src/auth", files=["src/auth/handler.py"])
         mock_context = MagicMock(spec=SummaryContext)
         mock_context.modules = [mock_module]
-        mock_context.clone_result = MagicMock(repo_url="https://github.com/test/repo")
+        mock_context.repo_url = "https://github.com/test/repo"
         mock_context.dep_graph = MagicMock()
         mock_context.dep_graph.graph = MagicMock()
         mock_context.dep_graph.graph.nodes = MagicMock(return_value=[])
@@ -93,7 +93,7 @@ class TestQAPersistence:
         mock_module = ModuleGroup(name="payment", dir_path="src/payment", files=["src/payment/handler.py"])
         mock_context = MagicMock(spec=SummaryContext)
         mock_context.modules = [mock_module]
-        mock_context.clone_result = MagicMock(repo_url="https://github.com/test/repo")
+        mock_context.repo_url = "https://github.com/test/repo"
 
         with patch("src.tools.memory_feedback.repo_cache.get", return_value=mock_context):
             with patch.object(ProjectMemory, "__init__", return_value=None) as mock_init:
@@ -129,7 +129,7 @@ class TestViewCountIncrement:
         )
         mock_context = MagicMock(spec=SummaryContext)
         mock_context.modules = [mock_module]
-        mock_context.clone_result = MagicMock(repo_url="https://github.com/test/repo")
+        mock_context.repo_url = "https://github.com/test/repo"
         mock_context.parse_results = []
         mock_context.dep_graph = MagicMock()
 
@@ -182,7 +182,7 @@ class TestAssembleContextWithMemory:
 
             # Create mock context
             mock_context = MagicMock(spec=SummaryContext)
-            mock_context.clone_result = MagicMock(repo_url="https://github.com/test/repo")
+            mock_context.repo_url = "https://github.com/test/repo"
             mock_module = ModuleGroup(name="auth", dir_path="src/auth", files=["src/auth/handler.py"])
             mock_context.modules = [mock_module]
             mock_context.dep_graph = MagicMock()
@@ -210,7 +210,8 @@ class TestMemoryFeedbackGracefulDegradation:
     async def test_memory_feedback_no_repo_url(self):
         """Test memory_feedback handles missing repo_url gracefully."""
         mock_context = MagicMock(spec=SummaryContext)
-        mock_context.clone_result = MagicMock(repo_url=None)
+        mock_context.repo_url = None
+        mock_context.modules = []
 
         with patch("src.tools.memory_feedback.repo_cache.get", return_value=mock_context):
             result = await memory_feedback(
@@ -228,7 +229,7 @@ class TestMemoryFeedbackGracefulDegradation:
         mock_module = ModuleGroup(name="valid", dir_path="src/valid", files=[])
         mock_context = MagicMock(spec=SummaryContext)
         mock_context.modules = [mock_module]
-        mock_context.clone_result = MagicMock(repo_url="https://github.com/test/repo")
+        mock_context.repo_url = "https://github.com/test/repo"
 
         with patch("src.tools.memory_feedback.repo_cache.get", return_value=mock_context):
             result = await memory_feedback(

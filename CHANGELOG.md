@@ -2,6 +2,26 @@
 
 All notable changes to CodeBook will be documented in this file.
 
+## [0.5.0] — Sprint 3: Graph Optimization + Mermaid Layered Display (2026-03-27)
+
+### Added
+- **依赖图 O(1) 索引查找**: `build()` 第一遍注册节点时同步构建三张索引表（`_name_index`、`_method_name_index`、`_module_path_index`），`_resolve_callee` 从 O(n²) 全文件扫描改为 O(1) 哈希查找。FastAPI 1122 文件基准测试图构建 2.02s → 0.034s（**59x 提速**）。
+- **Mermaid 分层展示**: `to_mermaid()` 新增 `level="overview"` 模式，大项目（>30 模块）自动将子模块按顶层目录聚合为超级节点。FastAPI 85 模块 → 5 个顶层节点，Mermaid 输出从 273 行降到 23 行。
+- **Mermaid 聚焦展开**: `to_mermaid(level="overview", focus="fastapi")` 展开单个超级节点，内部子模块实线连接 + 外部模块虚线连接。
+- **`get_expandable_groups()`**: 返回可展开超级节点组的元数据（子模块数、文件数、代码行数）。
+- **scan_repo 分层集成**: 输出新增 `mermaid_overview`（顶层概览图）、`mermaid_full`（完整模块图）、`expandable_groups` 字段，模块数 ≤ 30 时自动降级到模块图。
+- 28 个新测试覆盖索引优化、分层展示、边界情况（`test_sprint3_graph.py`）。
+- 设计文档 `docs/sprint3_mermaid_layered_design.md`。
+- Total test count: **592** (up from 487 in M2, +21.6%).
+
+### Changed
+- **`_resolve_callee` 签名简化**: 不再需要传入 `all_results` 参数，改为使用内部索引。
+- **`DEFAULT_MAX_OVERVIEW_NODES` 常量**: 新增全局常量控制顶层图最大节点数（默认 30）。
+
+### Fixed
+- **`memory_feedback` repo_url 缓存传递**: 修复 `ctx.clone_result.repo_url`（不存在）→ `ctx.repo_url`（正确路径），同步修复 `ask_about`、`read_chapter`、`diagnose` 中相同的属性访问错误。`_repo_cache` 序列化/反序列化增加 `repo_url` 字段持久化。
+- 短模块名冲突时的 debug 日志记录，避免索引覆盖。
+
 ## [0.4.0] — M2: Python Native AST Extractor (2026-03-24)
 
 ### Added

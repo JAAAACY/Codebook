@@ -239,6 +239,7 @@ class RepoCache:
             "timestamp": now,
             "last_accessed": now,
             "role": ctx.role,
+            "repo_url": ctx.repo_url,
             "clone_result": _clone_to_dict(ctx.clone_result),
             "parse_results": [_pr_to_dict(pr) for pr in ctx.parse_results],
             "modules": [_module_to_dict(m) for m in ctx.modules],
@@ -306,6 +307,7 @@ class RepoCache:
                 modules=modules,
                 dep_graph=dep_graph,
                 role=data.get("role", "pm"),
+                repo_url=data.get("repo_url"),
             )
 
         except Exception as e:
