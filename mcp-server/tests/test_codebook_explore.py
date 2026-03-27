@@ -288,3 +288,44 @@ class TestBlueprintRenderer:
         assert "db" in html_content
         assert "Needs attention" in html_content  # yellow 模块的 badge
         assert "All (2)" in html_content
+
+    def test_render_blueprint_with_layered_mermaid(self):
+        """分层 Mermaid 图在 HTML 中正确渲染。"""
+        from src.tools.blueprint_renderer import render_blueprint_html
+
+        report_data = {
+            "overview": {
+                "project_overview": "大型项目",
+                "stats": {"files": 100, "code_files": 90, "modules": 40, "functions": 200, "total_lines": 5000, "languages": {"python": 90}, "parse_quality": {"native": 90}, "avg_parse_confidence": 1.0},
+                "mermaid_diagram": "graph TD\n  A-->B",
+                "mermaid_overview": "graph TD\n  docs_src-->fastapi",
+                "mermaid_full": "graph TD\n  docs_src_t1-->fastapi_core",
+                "expandable_groups": {"docs_src": {"sub_modules": 35, "total_files": 70, "total_lines": 3000}, "fastapi": {"sub_modules": 5, "total_files": 20, "total_lines": 1500}},
+                "parse_warnings": [],
+            },
+            "module_cards": [],
+            "health_overview": None,
+            "focus_diagrams": {"docs_src": "graph TD\n  subgraph docs_src\n    t1\n  end", "fastapi": "graph TD\n  subgraph fastapi\n    core\n  end"},
+            "selection_strategy": "topology_driven",
+            "query": "",
+            "role": "pm",
+        }
+
+        html_content = render_blueprint_html(report_data, repo_url="https://github.com/test/big", total_time=5.0)
+
+        # 分层 UI 元素
+        assert "layer-tabs" in html_content
+        assert "Overview" in html_content
+        assert "Full" in html_content
+        assert "mermaid-overview" in html_content
+        assert "mermaid-full" in html_content
+        assert "mermaid-focus" in html_content
+        # 可展开组按钮
+        assert "docs_src (35)" in html_content
+        assert "fastapi (5)" in html_content
+        # JS 函数
+        assert "showLayer" in html_content
+        assert "showFocusGroup" in html_content
+        # focus 数据嵌入
+        assert "docs_src" in html_content
+        assert "_focusData" in html_content

@@ -27,8 +27,8 @@ _OUTPUT_DIR = Path.home() / ".codebook" / "blueprints"
 
 
 def _safe(text: str) -> str:
-    """HTML 转义。"""
-    return html.escape(str(text)) if text else ""
+    """HTML 转义（含单引号，防止 onclick 属性中的 XSS）。"""
+    return html.escape(str(text), quote=True) if text else ""
 
 
 def _repo_slug(repo_url: str) -> str:
@@ -267,6 +267,9 @@ def render_blueprint_html(
     query = report_data.get("query", "")
     stats = overview.get("stats", {})
     mermaid_diagram = overview.get("mermaid_diagram", "")
+    mermaid_overview = overview.get("mermaid_overview", "")
+    mermaid_full = overview.get("mermaid_full", "")
+    expandable_groups = overview.get("expandable_groups", {}) or {}
     project_overview = overview.get("project_overview", "")
     parse_warnings = overview.get("parse_warnings", [])
 
@@ -302,15 +305,50 @@ def render_blueprint_html(
         items = "".join(f'<div class="warning-item">{_safe(w)}</div>' for w in parse_warnings)
         warnings_html = f'<div class="warnings-box">{items}</div>'
 
-    # Mermaid
+    # Mermaid — 分层展示
     mermaid_html = ""
-    if mermaid_diagram and mermaid_diagram.strip():
+    has_layers = bool(mermaid_overview and mermaid_full and expandable_groups)
+    if has_layers:
+        # 可展开组按钮
+        group_btns = []
+        for grp, meta in expandable_groups.items():
+            sub_n = meta.get("sub_modules", 0)
+            group_btns.append(
+                f'<button class="layer-btn" onclick="showFocusGroup(\'{_safe(grp)}\')">'
+                f'{_safe(grp)} ({sub_n})</button>'
+            )
+        group_btns_html = "\n".join(group_btns)
+
+        mermaid_html = (
+            '<div class="mermaid-box">'
+            '<div class="section-label">MODULE DEPENDENCY GRAPH</div>'
+            '<div class="layer-tabs">'
+            '<button class="layer-btn active" onclick="showLayer(\'overview\',this)">Overview</button>'
+            '<button class="layer-btn" onclick="showLayer(\'full\',this)">Full</button>'
+            '</div>'
+            f'<div class="layer-groups">{group_btns_html}</div>'
+            f'<div id="mermaid-overview" class="mermaid-layer"><pre class="mermaid">{_safe(mermaid_overview)}</pre></div>'
+            f'<div id="mermaid-full" class="mermaid-layer" style="display:none"><pre class="mermaid">{_safe(mermaid_full)}</pre></div>'
+            '<div id="mermaid-focus" class="mermaid-layer" style="display:none"></div>'
+            '</div>'
+        )
+    elif mermaid_diagram and mermaid_diagram.strip():
         mermaid_html = (
             '<div class="mermaid-box">'
             '<div class="section-label">MODULE DEPENDENCY GRAPH</div>'
             f'<pre class="mermaid">{_safe(mermaid_diagram)}</pre>'
             '</div>'
         )
+
+    # 可展开组的 focus Mermaid 数据（JSON 嵌入 JS）
+    focus_data_json = json.dumps({}, ensure_ascii=False)
+    if has_layers:
+        # 在 HTML 生成时我们无法调用 dep_graph.to_mermaid(focus=...)，
+        # 所以通过 report_data 传入预生成的 focus 图，或留空让前端提示用户。
+        # 当前方案：focus_data 由 scan_repo 预先生成（如果有的话），
+        # 否则嵌入组名列表供前端显示占位。
+        focus_data = report_data.get("focus_diagrams", {})
+        focus_data_json = json.dumps(focus_data, ensure_ascii=False).replace("</", "<\\/")
 
     # 模块卡片
     module_cards_html = "\n".join(
@@ -371,6 +409,11 @@ body{{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,s
 .quality-legend span{{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px}}
 .mermaid-box{{background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:20px}}
 .mermaid-box .section-label{{font-size:12px;font-weight:600;color:var(--dim);letter-spacing:0.04em;margin-bottom:12px}}
+.layer-tabs{{display:flex;gap:6px;margin-bottom:10px}}
+.layer-groups{{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}}
+.layer-btn{{padding:4px 14px;border-radius:999px;font-size:12px;font-weight:500;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .15s}}
+.layer-btn:hover{{border-color:var(--accent);color:var(--accent-lt)}}
+.layer-btn.active{{border-color:var(--accent);background:rgba(99,102,241,0.09);color:var(--accent-lt)}}
 .mermaid svg{{max-width:100%}}
 .filter-bar{{display:flex;gap:8px;margin-top:28px;margin-bottom:14px}}
 .filter-btn{{padding:6px 16px;border-radius:999px;font-size:13px;font-weight:500;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .15s}}
@@ -435,6 +478,7 @@ body{{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,s
 
 <script>
 mermaid.initialize({{theme:'dark',themeVariables:{{primaryColor:'#1a1d2b',lineColor:'#6366f1',textColor:'#e2e8f0'}}}});
+var _focusData={focus_data_json};
 function toggleCard(el){{el.classList.toggle('open')}}
 function filterModules(type,btn){{
   document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
@@ -446,6 +490,36 @@ function filterModules(type,btn){{
     else if(type==='selected')c.style.display=sel?'':'none';
     else if(type==='attention')c.style.display=h!=='green'?'':'none';
   }});
+}}
+function showLayer(id,btn){{
+  document.querySelectorAll('.layer-tabs .layer-btn').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  document.querySelectorAll('.layer-groups .layer-btn').forEach(b=>b.classList.remove('active'));
+  ['mermaid-overview','mermaid-full','mermaid-focus'].forEach(x=>{{
+    var el=document.getElementById(x);if(el)el.style.display='none';
+  }});
+  var target=document.getElementById('mermaid-'+id);
+  if(target){{target.style.display='';var pres=target.querySelectorAll('.mermaid:not([data-processed])');if(pres.length)mermaid.run({{nodes:pres}})}}
+}}
+function showFocusGroup(group){{
+  document.querySelectorAll('.layer-tabs .layer-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.layer-groups .layer-btn').forEach(b=>{{
+    b.classList.toggle('active',b.textContent.startsWith(group));
+  }});
+  ['mermaid-overview','mermaid-full','mermaid-focus'].forEach(x=>{{
+    var el=document.getElementById(x);if(el)el.style.display='none';
+  }});
+  var box=document.getElementById('mermaid-focus');
+  if(!box)return;
+  var diagram=_focusData[group];
+  if(diagram){{
+    box.innerHTML='<pre class="mermaid">'+diagram.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</pre>';
+    box.style.display='';
+    mermaid.run({{nodes:box.querySelectorAll('.mermaid')}});
+  }}else{{
+    box.innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px">Use read_chapter to explore this group in detail.</div>';
+    box.style.display='';
+  }}
 }}
 </script>
 </body>

@@ -26,7 +26,7 @@ import structlog
 
 from src.memory.project_memory import ProjectMemory
 from src.parsers.ast_parser import ParseResult, parse_all
-from src.parsers.dependency_graph import DependencyGraph
+from src.parsers.dependency_graph import DEFAULT_MAX_OVERVIEW_NODES, DependencyGraph
 from src.parsers.module_grouper import (
     ModuleGroup,
     build_node_module_map,
@@ -558,6 +558,24 @@ async def scan_repo(
     connections = _build_connections(dep_graph)
     mermaid = dep_graph.to_mermaid(level="module")
 
+    # Sprint 3: 分层展示 — 大项目自动生成聚合概览图
+    module_count = dep_graph.get_module_graph().number_of_nodes()
+    focus_diagrams: dict[str, str] = {}
+    if module_count > DEFAULT_MAX_OVERVIEW_NODES:
+        mermaid_overview = dep_graph.to_mermaid(level="overview")
+        mermaid_full = mermaid
+        expandable_groups = dep_graph.get_expandable_groups()
+        # 预生成每个可展开组的 focus 图（用于 HTML 蓝图交互）
+        for grp in expandable_groups:
+            try:
+                focus_diagrams[grp] = dep_graph.to_mermaid(level="overview", focus=grp)
+            except Exception as e:
+                logger.warning("scan_repo.focus_diagram_failed", group=grp, error=str(e))
+    else:
+        mermaid_overview = mermaid
+        mermaid_full = None
+        expandable_groups = None
+
     step_times["enhance"] = round(time.time() - step_start, 2)
     logger.info(
         "scan_repo.step6_enhance.done",
@@ -605,6 +623,7 @@ async def scan_repo(
         "modules": enhanced_modules,
         "connections": connections,
         "mermaid_diagram": mermaid,
+        "mermaid_overview": mermaid_overview,
         "stats": {
             "files": len(clone_result.files),
             "code_files": len(code_files),
@@ -624,6 +643,11 @@ async def scan_repo(
 
     if chapters is not None:
         result["chapters"] = chapters
+    if mermaid_full is not None:
+        result["mermaid_full"] = mermaid_full
+        result["expandable_groups"] = expandable_groups
+    if focus_diagrams:
+        result["focus_diagrams"] = focus_diagrams
 
     # M1: 降级提示
     partial_ratio = (

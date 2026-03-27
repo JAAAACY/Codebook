@@ -9,6 +9,10 @@ from src.parsers.ast_parser import ParseResult, CallInfo
 
 logger = structlog.get_logger()
 
+# ── 常量 ──────────────────────────────────────────────────
+DEFAULT_MAX_OVERVIEW_NODES: int = 30
+_HEAVY_EDGE_CALL_THRESHOLD: int = 5
+
 
 @dataclass
 class NodeAttrs:
@@ -40,6 +44,11 @@ class DependencyGraph:
         self.graph = nx.DiGraph()
         self._file_functions: dict[str, set[str]] = {}  # file -> function names
         self._module_map: dict[str, str] = {}  # node_id -> module_group
+        # ── Sprint 3: O(1) 查找索引 ──
+        self._name_index: dict[str, list[str]] = {}  # func/class name -> [node_ids]
+        self._file_class_methods: dict[str, dict[str, str]] = {}  # file -> {Class.method: node_id}
+        self._method_name_index: dict[str, dict[str, str]] = {}  # file -> {method_name: node_id} for O(1) lookup
+        self._module_path_index: dict[str, str] = {}  # import module path -> file_path
 
     def build(self, parse_results: list[ParseResult]) -> "DependencyGraph":
         """从解析结果构建依赖图。
@@ -50,9 +59,10 @@ class DependencyGraph:
         Returns:
             self，支持链式调用。
         """
-        # 第一遍: 注册所有函数/类节点
+        # 第一遍: 注册所有函数/类节点 + 构建查找索引
         for pr in parse_results:
             file_funcs = set()
+            class_methods: dict[str, str] = {}
             for func in pr.functions:
                 node_id = self._make_node_id(pr.file_path, func.name, func.parent_class)
                 self.graph.add_node(node_id, **{
@@ -64,6 +74,11 @@ class DependencyGraph:
                     "label": func.name,
                 })
                 file_funcs.add(func.name)
+                # 索引: 函数名 → node_ids
+                self._name_index.setdefault(func.name, []).append(node_id)
+                # 索引: 类方法 → node_id
+                if func.parent_class:
+                    class_methods[f"{func.parent_class}.{func.name}"] = node_id
 
             for cls in pr.classes:
                 node_id = f"{pr.file_path}::{cls.name}"
@@ -75,14 +90,49 @@ class DependencyGraph:
                     "node_type": "class",
                     "label": cls.name,
                 })
+                # 索引: 类名 → node_ids
+                self._name_index.setdefault(cls.name, []).append(node_id)
 
             self._file_functions[pr.file_path] = file_funcs
+            if class_methods:
+                self._file_class_methods[pr.file_path] = class_methods
+                # Reverse index: method_name -> node_id for O(1) step-2/3 lookup.
+                # When multiple classes in the same file share a method name, the last
+                # one wins — callers should use the Class.method key if precision matters.
+                self._method_name_index[pr.file_path] = {
+                    cls_key.rsplit(".", 1)[1]: node_id
+                    for cls_key, node_id in class_methods.items()
+                }
+
+            # 索引: import 模块路径 → file_path（用于跨文件解析）
+            self._module_path_index[pr.file_path] = pr.file_path
+            # 从 file_path 推断可能的模块路径 (src/parsers/foo.py → src.parsers.foo)
+            module_path = pr.file_path.replace("/", ".").replace("\\", ".")
+            for suffix in (".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java"):
+                if module_path.endswith(suffix):
+                    module_path = module_path[: -len(suffix)]
+                    break
+            self._module_path_index[module_path] = pr.file_path
+            # 也存最后一级路径 (foo → file_path)
+            parts = module_path.rsplit(".", 1)
+            if len(parts) == 2:
+                short_name = parts[1]
+                existing = self._module_path_index.get(short_name)
+                if existing is not None and existing != pr.file_path:
+                    logger.debug(
+                        "dependency_graph.short_name_collision",
+                        short_name=short_name,
+                        existing_file=existing,
+                        ignored_file=pr.file_path,
+                    )
+                else:
+                    self._module_path_index[short_name] = pr.file_path
 
         # 第二遍: 添加调用关系边
         for pr in parse_results:
             for call in pr.calls:
                 caller_id = self._resolve_node(pr.file_path, call.caller_func, pr)
-                callee_id = self._resolve_callee(pr, call, parse_results)
+                callee_id = self._resolve_callee(pr, call)
 
                 if caller_id and callee_id and caller_id != callee_id:
                     if self.graph.has_edge(caller_id, callee_id):
@@ -156,15 +206,75 @@ class DependencyGraph:
             return []
         return list(self.graph.successors(node_id))
 
-    def to_mermaid(self, level: str = "module") -> str:
+    def _build_super_groups(self) -> dict[str, list[str]]:
+        """将模块按顶层目录聚合为超级节点组。
+
+        Returns:
+            {顶层目录: [子模块名列表]}
+            单模块的组直接保留原名，不聚合。
+        """
+        mg = self.get_module_graph()
+        groups: dict[str, list[str]] = {}
+        for node in mg.nodes:
+            top = node.split("/")[0] if "/" in node else node
+            groups.setdefault(top, []).append(node)
+        return groups
+
+    def get_expandable_groups(self) -> dict[str, dict[str, int]]:
+        """返回可展开的超级节点组元数据。
+
+        Returns:
+            {group_name: {sub_modules: N, total_files: N, total_lines: N}}
+            仅包含子模块数 > 1 的组。
+        """
+        super_groups = self._build_super_groups()
+        result: dict[str, dict] = {}
+
+        for group_name, sub_modules in super_groups.items():
+            if len(sub_modules) <= 1:
+                continue
+
+            seen_files: set[str] = set()
+            total_lines = 0
+            sub_set = set(sub_modules)
+            for _node_id, data in self.graph.nodes(data=True):
+                mg = data.get("module_group", "")
+                if mg in sub_set:
+                    file_path = data.get("file", "")
+                    if file_path:
+                        seen_files.add(file_path)
+                    total_lines += data.get("line_end", 0) - data.get("line_start", 0)
+            total_files = len(seen_files)
+
+            result[group_name] = {
+                "sub_modules": len(sub_modules),
+                "total_files": total_files,
+                "total_lines": total_lines,
+            }
+
+        return result
+
+    def to_mermaid(
+        self,
+        level: str = "module",
+        focus: str | None = None,
+        max_nodes: int = DEFAULT_MAX_OVERVIEW_NODES,
+    ) -> str:
         """生成 Mermaid flowchart 图。
 
         Args:
-            level: "module" 生成模块级图，"function" 生成函数级图。
+            level: "module" 生成模块级图，"function" 生成函数级图，
+                   "overview" 生成聚合后的顶层概览图。
+            focus: 展开某个超级节点（顶层目录名），仅 overview 模式有效。
+            max_nodes: 顶层图的最大节点数，仅 overview 模式有效。
 
         Returns:
             Mermaid graph TD 字符串。
         """
+        if level == "overview":
+            if focus:
+                return self._focused_module_mermaid(focus)
+            return self._overview_mermaid(max_nodes)
         if level == "module":
             return self._module_level_mermaid()
         return self._function_level_mermaid()
@@ -206,41 +316,46 @@ class DependencyGraph:
             })
         return module_id
 
-    def _resolve_callee(self, caller_pr: ParseResult, call: CallInfo,
-                        all_results: list[ParseResult]) -> str | None:
-        """解析被调用函数的节点 ID。"""
+    def _resolve_callee(self, caller_pr: ParseResult, call: CallInfo) -> str | None:
+        """解析被调用函数的节点 ID。
+
+        Sprint 3 优化: 使用预构建索引替代全文件扫描，O(n²) → O(1) 查找。
+        """
         callee_name = call.callee_name
 
-        # 1. 本文件内查找
+        # 1. 本文件内查找 — O(1) 哈希查找
         direct = f"{caller_pr.file_path}::{callee_name}"
         if direct in self.graph:
             return direct
 
-        # 2. 本文件的类方法
-        for cls in caller_pr.classes:
-            candidate = f"{caller_pr.file_path}::{cls.name}.{callee_name}"
-            if candidate in self.graph:
-                return candidate
+        # 2. 本文件的类方法 — O(1) 通过 _method_name_index 索引
+        file_mn = self._method_name_index.get(caller_pr.file_path)
+        if file_mn:
+            node_id = file_mn.get(callee_name)
+            if node_id:
+                return node_id
 
-        # 3. 跨文件查找（通过 import 关系）
+        # 3. 跨文件查找（通过 import → 模块路径索引） — O(imports) 而非 O(n)
         for imp in caller_pr.imports:
             if callee_name in imp.names or callee_name == imp.module.split(".")[-1]:
-                for pr in all_results:
-                    candidate = f"{pr.file_path}::{callee_name}"
+                # 通过模块路径索引定位目标文件
+                target_file = self._module_path_index.get(imp.module)
+                if target_file:
+                    candidate = f"{target_file}::{callee_name}"
                     if candidate in self.graph:
                         return candidate
-                    for cls in pr.classes:
-                        candidate = f"{pr.file_path}::{cls.name}.{callee_name}"
-                        if candidate in self.graph:
-                            return candidate
+                    # 检查目标文件的类方法 — O(1) 通过 _method_name_index
+                    target_mn = self._method_name_index.get(target_file)
+                    if target_mn:
+                        mn_hit = target_mn.get(callee_name)
+                        if mn_hit:
+                            return mn_hit
 
-        # 4. 全局搜索（函数名匹配）
-        for pr in all_results:
-            if pr.file_path == caller_pr.file_path:
-                continue
-            candidate = f"{pr.file_path}::{callee_name}"
-            if candidate in self.graph:
-                return candidate
+        # 4. 全局索引查找 — O(候选数) 而非 O(n)
+        candidates = self._name_index.get(callee_name, [])
+        for node_id in candidates:
+            if not node_id.startswith(f"{caller_pr.file_path}::"):
+                return node_id
 
         return None
 
@@ -279,6 +394,150 @@ class DependencyGraph:
     def _sanitize_mermaid_label(self, text: str) -> str:
         """清理 Mermaid 标签中的特殊字符。"""
         return text.replace('"', "'").replace("<", "‹").replace(">", "›")
+
+    def _overview_mermaid(self, max_nodes: int = DEFAULT_MAX_OVERVIEW_NODES) -> str:
+        """生成聚合后的顶层概览图（Level 0）。
+
+        将子模块按顶层目录聚合为超级节点。
+        若模块数 ≤ max_nodes，直接返回 module 级图。
+        """
+        max_nodes = max(max_nodes, 1)
+        mg = self.get_module_graph()
+        if not mg.nodes:
+            return "graph TD\n  empty[暂无模块依赖数据]"
+
+        # 如果模块数已在限制内，直接用 module 级图
+        if len(mg.nodes) <= max_nodes:
+            return self._module_level_mermaid()
+
+        super_groups = self._build_super_groups()
+
+        # 聚合后仍超限 → 按子模块数排序取 Top N-1，其余合并为"其他"
+        if len(super_groups) > max_nodes:
+            sorted_groups = sorted(
+                super_groups.items(),
+                key=lambda kv: len(kv[1]),
+                reverse=True,
+            )
+            keep = dict(sorted_groups[: max_nodes - 1])
+            overflow_modules: list[str] = []
+            for _, subs in sorted_groups[max_nodes - 1 :]:
+                overflow_modules.extend(subs)
+            keep["其他"] = overflow_modules
+            super_groups = keep
+
+        # 构建超级节点标签
+        lines = ["graph TD"]
+        for group_name, sub_modules in super_groups.items():
+            safe_id = self._sanitize_mermaid_id(group_name)
+            if len(sub_modules) > 1:
+                label = f"{group_name} ({len(sub_modules)} 子模块)"
+            else:
+                label = group_name
+            lines.append(f"  {safe_id}[\"{self._sanitize_mermaid_label(label)}\"]")
+
+        # 聚合边：将模块级边合并为超级节点间的边
+        super_edges: dict[tuple[str, str], int] = {}
+        module_to_super: dict[str, str] = {}
+        for group_name, sub_modules in super_groups.items():
+            for sm in sub_modules:
+                module_to_super[sm] = group_name
+
+        for u, v, data in mg.edges(data=True):
+            u_super = module_to_super.get(u, u)
+            v_super = module_to_super.get(v, v)
+            if u_super != v_super:
+                key = (u_super, v_super)
+                super_edges[key] = super_edges.get(key, 0) + data.get("call_count", 1)
+
+        for (u, v), count in super_edges.items():
+            safe_u = self._sanitize_mermaid_id(u)
+            safe_v = self._sanitize_mermaid_id(v)
+            if count >= _HEAVY_EDGE_CALL_THRESHOLD:
+                lines.append(f"  {safe_u} ==> {safe_v}")
+            else:
+                lines.append(f"  {safe_u} --> {safe_v}")
+
+        return "\n".join(lines)
+
+    def _focused_module_mermaid(self, focus: str) -> str:
+        """展开单个超级节点的详细视图。
+
+        focus 组内子模块完整展示（subgraph），
+        外部模块折叠为超级节点，
+        外部→内部的边用虚线表示。
+        """
+        super_groups = self._build_super_groups()
+        if focus not in super_groups:
+            logger.warning("dependency_graph.focus_not_found", focus=focus)
+            safe_label = self._sanitize_mermaid_label(focus)
+            return f"graph TD\n  empty[\"未找到模块组: {safe_label}\"]"
+
+        mg = self.get_module_graph()
+        focus_modules = set(super_groups[focus])
+
+        # 构建 module → super_group 映射
+        module_to_super: dict[str, str] = {}
+        for group_name, sub_modules in super_groups.items():
+            for sm in sub_modules:
+                module_to_super[sm] = group_name
+
+        lines = ["graph TD"]
+
+        # focus 组内子模块展开为 subgraph
+        safe_focus = self._sanitize_mermaid_id(focus)
+        lines.append(f"  subgraph {safe_focus}[\"{self._sanitize_mermaid_label(focus)}\"]")
+        for sm in sorted(focus_modules):
+            safe_id = self._sanitize_mermaid_id(sm)
+            lines.append(f"    {safe_id}[\"{self._sanitize_mermaid_label(sm)}\"]")
+        lines.append("  end")
+
+        # 外部超级节点（折叠）
+        external_supers: set[str] = set()
+        for u, v, _data in mg.edges(data=True):
+            if u in focus_modules and v not in focus_modules:
+                external_supers.add(module_to_super.get(v, v))
+            elif v in focus_modules and u not in focus_modules:
+                external_supers.add(module_to_super.get(u, u))
+
+        for ext in sorted(external_supers):
+            safe_id = self._sanitize_mermaid_id(ext)
+            ext_subs = super_groups.get(ext, [ext])
+            if len(ext_subs) > 1:
+                label = f"{ext} ({len(ext_subs)} 子模块)"
+            else:
+                label = ext
+            lines.append(f"  {safe_id}[\"{self._sanitize_mermaid_label(label)}\"]")
+
+        # focus 组内部边（实线）
+        for u, v, data in mg.edges(data=True):
+            if u in focus_modules and v in focus_modules:
+                safe_u = self._sanitize_mermaid_id(u)
+                safe_v = self._sanitize_mermaid_id(v)
+                count = data.get("call_count", 1)
+                if count >= _HEAVY_EDGE_CALL_THRESHOLD:
+                    lines.append(f"  {safe_u} ==> {safe_v}")
+                else:
+                    lines.append(f"  {safe_u} --> {safe_v}")
+
+        # 外部连接（虚线）— 聚合到超级节点
+        external_edges: dict[tuple[str, str], int] = {}
+        for u, v, data in mg.edges(data=True):
+            if u in focus_modules and v not in focus_modules:
+                ext_super = module_to_super.get(v, v)
+                key = (u, ext_super)
+                external_edges[key] = external_edges.get(key, 0) + data.get("call_count", 1)
+            elif v in focus_modules and u not in focus_modules:
+                ext_super = module_to_super.get(u, u)
+                key = (ext_super, v)
+                external_edges[key] = external_edges.get(key, 0) + data.get("call_count", 1)
+
+        for (u, v), _count in external_edges.items():
+            safe_u = self._sanitize_mermaid_id(u)
+            safe_v = self._sanitize_mermaid_id(v)
+            lines.append(f"  {safe_u} -.- {safe_v}")
+
+        return "\n".join(lines)
 
     def _module_level_mermaid(self) -> str:
         """生成模块级 Mermaid 图。"""

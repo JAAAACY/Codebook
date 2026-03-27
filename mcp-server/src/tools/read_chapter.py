@@ -96,7 +96,7 @@ async def read_chapter(module_name: str, role: str = "pm") -> dict:
 
     # Increment view_count in ProjectMemory
     try:
-        repo_url = getattr(ctx.clone_result, "repo_url", None) or ""
+        repo_url = ctx.repo_url or ""
         if repo_url:
             memory = ProjectMemory(repo_url)
             path = memory._get_json_path("understanding.json")
@@ -146,9 +146,21 @@ def _generate_compact_chapter(ctx: SummaryContext, target) -> dict:
     # 局部依赖图：只包含当前模块内部的调用关系
     dep_mermaid = _build_module_local_mermaid(ctx, target, relevant_prs)
 
+    # Sprint 3: 确定当前模块属于哪个超级节点组
+    parent_group = ""
+    try:
+        super_groups = ctx.dep_graph._build_super_groups()
+        for grp, sub_modules in super_groups.items():
+            if target.name in sub_modules or target.dir_path in sub_modules:
+                parent_group = grp
+                break
+    except Exception:
+        pass  # 不影响主流程
+
     result = {
         "status": "ok",
         "module_name": target.name,
+        "parent_group": parent_group,
         "module_summary": {
             "dir_path": target.dir_path,
             "total_files": total_files,

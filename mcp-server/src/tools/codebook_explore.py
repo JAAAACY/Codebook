@@ -427,6 +427,9 @@ def _build_report_data(
         "project_overview": scan.get("project_overview", ""),
         "stats": scan.get("stats", {}),
         "mermaid_diagram": scan.get("mermaid_diagram", ""),
+        "mermaid_overview": scan.get("mermaid_overview", ""),
+        "mermaid_full": scan.get("mermaid_full", ""),
+        "expandable_groups": scan.get("expandable_groups", {}),
         "parse_warnings": scan.get("parse_warnings", []),
     }
 
@@ -482,6 +485,7 @@ def _build_report_data(
         "overview": overview,
         "module_cards": module_cards,
         "health_overview": health_overview,
+        "focus_diagrams": scan.get("focus_diagrams", {}),
         "selection_strategy": selection_strategy,
         "query": query,
         "role": role,

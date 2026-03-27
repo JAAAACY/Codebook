@@ -15,7 +15,7 @@ import structlog
 
 from src.config import settings
 from src.parsers.ast_parser import ParseResult
-from src.parsers.dependency_graph import DependencyGraph
+from src.parsers.dependency_graph import DEFAULT_MAX_OVERVIEW_NODES, DependencyGraph
 from src.parsers.module_grouper import ModuleGroup
 from src.parsers.repo_cloner import CloneResult
 from src.glossary.term_resolver import TermResolver
@@ -735,8 +735,11 @@ def generate_local_blueprint(ctx: SummaryContext) -> dict:
             "pm_note": f"公开接口: {', '.join(m.public_interfaces[:3])}" if m.public_interfaces else "",
         })
 
-    # Mermaid 图
-    mermaid = ctx.dep_graph.to_mermaid(level="module")
+    # Mermaid 图 — 大项目自动使用聚合概览
+    if len(mg.nodes) > DEFAULT_MAX_OVERVIEW_NODES:
+        mermaid = ctx.dep_graph.to_mermaid(level="overview")
+    else:
+        mermaid = ctx.dep_graph.to_mermaid(level="module")
 
     # 连接
     connections = []
