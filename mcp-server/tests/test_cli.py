@@ -242,3 +242,23 @@ class TestStatusConsistency:
         import inspect
         source = inspect.getsource(cli_module._status)
         assert "subprocess" not in source, "_status() should not call subprocess for any target"
+
+
+class TestUninstallCoverage:
+    """_uninstall() 应覆盖所有目标，包括 claude-code。"""
+
+    def test_uninstall_removes_codebook_from_json(self, tmp_path):
+        from src.cli import _read_json, _write_json, _remove_nested
+
+        fake_config = tmp_path / ".mcp.json"
+        data = {"mcpServers": {"codebook": {"command": "python3"}, "other": {"command": "other"}}}
+        _write_json(fake_config, data)
+
+        result_data = _read_json(fake_config)
+        removed = _remove_nested(result_data, "mcpServers", "codebook")
+        assert removed is True
+        _write_json(fake_config, result_data)
+
+        final = _read_json(fake_config)
+        assert "codebook" not in final["mcpServers"]
+        assert "other" in final["mcpServers"]
