@@ -1,5 +1,6 @@
 # CodeBook — The Code Understanding Layer
 
+[![PyPI version](https://img.shields.io/pypi/v/codebook-mcp)](https://pypi.org/project/codebook-mcp/)
 [![Tests](https://github.com/JAAAACY/Codebook/actions/workflows/test.yml/badge.svg)](https://github.com/JAAAACY/Codebook/actions/workflows/test.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
