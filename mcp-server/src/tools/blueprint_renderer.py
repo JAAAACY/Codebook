@@ -173,6 +173,7 @@ def _build_module_card_html(card: dict) -> str:
     depends_on = card.get("depends_on", [])
     used_by = card.get("used_by", [])
     chapter = card.get("chapter")
+    call_chains = card.get("call_chains", [])
 
     open_class = "open" if is_selected else ""
     selected_badge = (
@@ -180,19 +181,60 @@ def _build_module_card_html(card: dict) -> str:
         if is_selected else ""
     )
 
-    # 依赖信息
+    # 依赖标签（可点击高亮）
     deps_html = ""
     dep_parts = []
     if depends_on:
-        dep_parts.append(f'<span>Depends on: {_safe(", ".join(depends_on))}</span>')
+        dep_tags = " ".join(
+            f'<a class="dep-link" data-target="{_safe(d)}" onclick="event.stopPropagation();highlightModule(\'{_safe(d)}\')">{_safe(d)}</a>'
+            for d in depends_on
+        )
+        dep_parts.append(f'<span class="dep-group">Depends on: {dep_tags}</span>')
     if used_by:
-        dep_parts.append(f'<span>Used by: {_safe(", ".join(used_by))}</span>')
+        used_tags = " ".join(
+            f'<a class="dep-link" data-target="{_safe(u)}" onclick="event.stopPropagation();highlightModule(\'{_safe(u)}\')">{_safe(u)}</a>'
+            for u in used_by
+        )
+        dep_parts.append(f'<span class="dep-group">Used by: {used_tags}</span>')
     if dep_parts:
         deps_html = '<div class="module-deps">' + "".join(dep_parts) + "</div>"
 
     # 详情区域
     detail_html = ""
-    if chapter:
+
+    # 函数调用链（来自 dep_graph 交互数据）
+    if call_chains:
+        fn_rows = []
+        for fc in call_chains:
+            fn_name = fc.get("function", "")
+            if fn_name.startswith("_") or fn_name == "<anonymous>" or fn_name == "<module>":
+                continue
+            fn_file = fc.get("file", "")
+            fn_line = fc.get("line_start", 0)
+            callers = fc.get("callers", [])
+            callees = fc.get("callees", [])
+            caller_html = ""
+            if callers:
+                caller_html = f'<span class="fn-flow fn-callers" title="Called by">&larr; {_safe(", ".join(callers[:5]))}</span>'
+            callee_html = ""
+            if callees:
+                callee_html = f'<span class="fn-flow fn-callees" title="Calls">&rarr; {_safe(", ".join(callees[:5]))}</span>'
+            fn_rows.append(
+                f'<div class="fn-row" onclick="event.stopPropagation();toggleFnDetail(this)">'
+                f'<code class="fn-name">{_safe(fn_name)}()</code>'
+                f'<span class="fn-loc">{_safe(fn_file)}:{fn_line}</span>'
+                f'<div class="fn-detail">{caller_html}{callee_html}</div>'
+                f'</div>'
+            )
+        if fn_rows:
+            detail_html += (
+                '<div class="detail-section">'
+                '<div class="detail-label blue">FUNCTIONS &amp; CALL CHAINS</div>'
+                + "\n".join(fn_rows[:20]) +
+                "</div>"
+            )
+    elif chapter:
+        # 回退到 chapter 数据
         fn_rows = []
         for mc in chapter.get("module_cards", []):
             for fn in mc.get("functions", []):
@@ -215,6 +257,7 @@ def _build_module_card_html(card: dict) -> str:
                 "</div>"
             )
 
+    if chapter:
         # 模块局部 Mermaid
         dep_graph = chapter.get("dependency_graph", "")
         if dep_graph and dep_graph.strip():
@@ -230,10 +273,11 @@ def _build_module_card_html(card: dict) -> str:
         if detail_html else ""
     )
 
-    return f'''<div class="module-card {open_class}" data-selected="{str(is_selected).lower()}" data-health="{health}" onclick="toggleCard(this)">
+    safe_name = _safe(name)
+    return f'''<div class="module-card {open_class}" data-name="{safe_name}" data-selected="{str(is_selected).lower()}" data-health="{health}" onclick="toggleCard(this)">
   <div class="module-header">
     <div class="module-top">
-      <span class="module-name">{_safe(name)}</span>
+      <span class="module-name">{safe_name}</span>
       {_health_badge_html(health)}
       {selected_badge}
       <span class="module-arrow">&#9662;</span>
@@ -343,12 +387,16 @@ def render_blueprint_html(
     # 可展开组的 focus Mermaid 数据（JSON 嵌入 JS）
     focus_data_json = json.dumps({}, ensure_ascii=False)
     if has_layers:
-        # 在 HTML 生成时我们无法调用 dep_graph.to_mermaid(focus=...)，
-        # 所以通过 report_data 传入预生成的 focus 图，或留空让前端提示用户。
-        # 当前方案：focus_data 由 scan_repo 预先生成（如果有的话），
-        # 否则嵌入组名列表供前端显示占位。
         focus_data = report_data.get("focus_diagrams", {})
         focus_data_json = json.dumps(focus_data, ensure_ascii=False).replace("</", "<\\/")
+
+    # 交互式蓝图数据：每个模块的邻接关系（嵌入 JS 供前端高亮用）
+    adjacency_map: dict[str, dict] = {}
+    for card in module_cards:
+        adj = card.get("adjacency")
+        if adj:
+            adjacency_map[card.get("name", "")] = adj
+    adjacency_json = json.dumps(adjacency_map, ensure_ascii=False).replace("</", "<\\/")
 
     # 模块卡片
     module_cards_html = "\n".join(
@@ -420,8 +468,15 @@ body{{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,s
 .filter-btn:hover{{border-color:var(--accent);color:var(--accent-lt)}}
 .filter-btn.active{{border-color:var(--accent);background:rgba(99,102,241,0.09);color:var(--accent-lt)}}
 .module-list{{display:flex;flex-direction:column;gap:12px}}
-.module-card{{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;transition:border-color .2s}}
+.search-bar{{margin-top:24px}}
+.search-bar input{{width:100%;padding:10px 16px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;outline:none;transition:border-color .2s}}
+.search-bar input:focus{{border-color:var(--accent)}}
+.search-bar input::placeholder{{color:var(--dim)}}
+.module-card{{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;transition:border-color .25s,box-shadow .25s}}
 .module-card.open{{border-color:var(--border-hi)}}
+.module-card.highlight-upstream{{border-color:var(--red);box-shadow:0 0 0 1px var(--red)}}
+.module-card.highlight-downstream{{border-color:var(--blue);box-shadow:0 0 0 1px var(--blue)}}
+.module-card.highlight-self{{border-color:var(--accent);box-shadow:0 0 12px rgba(99,102,241,0.3)}}
 .module-header{{padding:16px 20px;cursor:pointer;user-select:none}}
 .module-top{{display:flex;align-items:center;gap:10px;flex-wrap:wrap}}
 .module-name{{font-size:16px;font-weight:700}}
@@ -429,17 +484,26 @@ body{{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,s
 .module-arrow{{color:var(--dim);font-size:16px;transition:transform .2s;margin-left:auto}}
 .module-card.open .module-arrow{{transform:rotate(180deg)}}
 .module-body{{font-size:13px;color:var(--muted);margin-top:6px;line-height:1.6}}
-.module-deps{{display:flex;gap:16px;margin-top:8px}}
-.module-deps span{{font-size:11px;color:var(--dim)}}
-.module-detail{{padding:0 20px 16px;border-top:1px solid var(--border);display:none}}
-.module-card.open .module-detail{{display:block}}
+.module-deps{{display:flex;gap:12px;margin-top:8px;flex-wrap:wrap}}
+.dep-group{{font-size:11px;color:var(--dim)}}
+.dep-link{{color:var(--accent);cursor:pointer;text-decoration:none;padding:1px 6px;border-radius:4px;transition:background .15s}}
+.dep-link:hover{{background:rgba(99,102,241,0.12);text-decoration:underline}}
+.module-detail{{padding:0 20px 16px;border-top:1px solid var(--border);max-height:0;overflow:hidden;transition:max-height .3s ease-out,padding .3s ease-out}}
+.module-card.open .module-detail{{max-height:2000px;padding:0 20px 16px;overflow:visible}}
 .detail-section{{margin-top:14px}}
 .detail-label{{font-size:12px;font-weight:600;letter-spacing:0.04em;margin-bottom:8px}}
 .detail-label.blue{{color:var(--blue)}}
 .detail-label.dim{{color:var(--dim)}}
-.fn-row{{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}}
+.fn-row{{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;cursor:pointer;transition:background .15s}}
+.fn-row:hover{{background:rgba(99,102,241,0.04)}}
 .fn-name{{color:var(--accent-lt);font-size:13px;font-family:'JetBrains Mono','Fira Code',monospace}}
 .fn-loc{{font-size:11px;color:var(--dim)}}
+.fn-detail{{display:none;width:100%;margin-top:4px;padding:6px 0 2px}}
+.fn-row.fn-open .fn-detail{{display:block}}
+.fn-flow{{display:block;font-size:11px;padding:2px 0}}
+.fn-callers{{color:var(--red)}}
+.fn-callees{{color:var(--blue)}}
+.module-card.search-hidden{{display:none}}
 .footer{{margin-top:40px;padding-top:14px;border-top:1px solid var(--border);font-size:11px;color:var(--dim);text-align:center}}
 </style>
 </head>
@@ -461,6 +525,10 @@ body{{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,s
   {parse_quality_html}
   {mermaid_html}
 
+  <div class="search-bar">
+    <input type="text" id="searchInput" placeholder="Search modules and functions..." oninput="searchModules(this.value)" />
+  </div>
+
   <div class="filter-bar">
     <button class="filter-btn active" onclick="filterModules('all',this)">All ({len(module_cards)})</button>
     <button class="filter-btn" onclick="filterModules('selected',this)">Analyzed ({selected_count})</button>
@@ -477,9 +545,22 @@ body{{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,s
 </div>
 
 <script>
-mermaid.initialize({{theme:'dark',themeVariables:{{primaryColor:'#1a1d2b',lineColor:'#6366f1',textColor:'#e2e8f0'}}}});
+mermaid.initialize({{
+  theme:'dark',
+  themeVariables:{{primaryColor:'#1a1d2b',lineColor:'#6366f1',textColor:'#e2e8f0'}},
+  securityLevel:'loose'
+}});
 var _focusData={focus_data_json};
+var _adjacency={adjacency_json};
+var _highlightTimer=null;
+
+/* ── Toggle card expand/collapse ── */
 function toggleCard(el){{el.classList.toggle('open')}}
+
+/* ── Toggle function detail row ── */
+function toggleFnDetail(el){{el.classList.toggle('fn-open')}}
+
+/* ── Filter modules by type ── */
 function filterModules(type,btn){{
   document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
@@ -491,6 +572,46 @@ function filterModules(type,btn){{
     else if(type==='attention')c.style.display=h!=='green'?'':'none';
   }});
 }}
+
+/* ── Search modules and functions ── */
+function searchModules(q){{
+  q=q.toLowerCase().trim();
+  document.querySelectorAll('.module-card').forEach(c=>{{
+    if(!q){{c.classList.remove('search-hidden');return}}
+    var name=(c.dataset.name||'').toLowerCase();
+    var body=(c.querySelector('.module-body')||{{}}).textContent||'';
+    var fns=Array.from(c.querySelectorAll('.fn-name')).map(f=>f.textContent).join(' ').toLowerCase();
+    var match=name.includes(q)||body.toLowerCase().includes(q)||fns.includes(q);
+    c.classList.toggle('search-hidden',!match);
+  }});
+}}
+
+/* ── Highlight module + its dependencies ── */
+function highlightModule(name){{
+  clearHighlights();
+  var adj=_adjacency[name];
+  if(!adj)return;
+  document.querySelectorAll('.module-card').forEach(c=>{{
+    var n=c.dataset.name;
+    if(n===name)c.classList.add('highlight-self');
+    else if(adj.upstream&&adj.upstream.includes(n))c.classList.add('highlight-upstream');
+    else if(adj.downstream&&adj.downstream.includes(n))c.classList.add('highlight-downstream');
+  }});
+  scrollToModule(name);
+  if(_highlightTimer)clearTimeout(_highlightTimer);
+  _highlightTimer=setTimeout(clearHighlights,5000);
+}}
+function clearHighlights(){{
+  document.querySelectorAll('.module-card').forEach(c=>{{
+    c.classList.remove('highlight-self','highlight-upstream','highlight-downstream');
+  }});
+}}
+function scrollToModule(name){{
+  var card=document.querySelector('.module-card[data-name="'+name+'"]');
+  if(card)card.scrollIntoView({{behavior:'smooth',block:'center'}});
+}}
+
+/* ── Mermaid layers ── */
 function showLayer(id,btn){{
   document.querySelectorAll('.layer-tabs .layer-btn').forEach(b=>b.classList.remove('active'));
   if(btn)btn.classList.add('active');
@@ -515,12 +636,34 @@ function showFocusGroup(group){{
   if(diagram){{
     box.innerHTML='<pre class="mermaid">'+diagram.replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</pre>';
     box.style.display='';
-    mermaid.run({{nodes:box.querySelectorAll('.mermaid')}});
+    mermaid.run({{nodes:box.querySelectorAll('.mermaid')}}).then(bindMermaidClicks);
   }}else{{
     box.innerHTML='<div style="color:var(--muted);font-size:13px;padding:12px">Use read_chapter to explore this group in detail.</div>';
     box.style.display='';
   }}
 }}
+
+/* ── Mermaid node click → scroll to module card ── */
+function bindMermaidClicks(){{
+  document.querySelectorAll('.mermaid svg .node,.mermaid svg .nodeLabel').forEach(n=>{{
+    n.style.cursor='pointer';
+    n.addEventListener('click',function(e){{
+      e.stopPropagation();
+      var text=(this.textContent||'').trim().replace(/\\s*\\(\\d+.*\\)$/,'');
+      highlightModule(text);
+    }});
+  }});
+}}
+
+/* ── Keyboard navigation ── */
+document.addEventListener('keydown',function(e){{
+  if(e.target.tagName==='INPUT')return;
+  if(e.key==='Escape'){{clearHighlights();document.getElementById('searchInput').value='';searchModules('')}}
+  if(e.key==='/'){{e.preventDefault();document.getElementById('searchInput').focus()}}
+}});
+
+/* ── Init: bind Mermaid clicks after render ── */
+mermaid.run().then(bindMermaidClicks).catch(function(){{}});
 </script>
 </body>
 </html>'''

@@ -164,6 +164,44 @@ class RepoCache:
         except Exception:
             return False
 
+    async def update_incremental(
+        self, repo_url: str, changes: "FileChanges",
+    ) -> "SummaryContext | None":
+        """增量更新缓存的 SummaryContext。
+
+        Args:
+            repo_url: 仓库地址。
+            changes: 文件变更（来自 file_hasher.diff）。
+
+        Returns:
+            更新后的 SummaryContext，缓存不存在或变更为空时返回 None。
+        """
+        from src.watcher.file_hasher import FileChanges
+        from src.watcher.incremental_scanner import incremental_rescan, merge_context
+
+        ctx = self.get(repo_url)
+        if ctx is None:
+            logger.warning("repo_cache.incremental_no_cache", repo_url=repo_url)
+            return None
+
+        if changes.is_empty:
+            return ctx
+
+        new_results, removed = await incremental_rescan(
+            repo_path=ctx.clone_result.repo_path,
+            changes=changes,
+            existing_files=ctx.clone_result.files,
+        )
+
+        updated_ctx = await merge_context(ctx, new_results, removed)
+        self.store(repo_url, updated_ctx)
+        logger.info(
+            "repo_cache.incremental_updated",
+            repo_url=repo_url,
+            changed=changes.total,
+        )
+        return updated_ctx
+
     def clear(self) -> None:
         """仅清除内存缓存（不删磁盘文件）。"""
         logger.debug("repo_cache.clearing_memory_cache")

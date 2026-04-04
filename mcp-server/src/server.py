@@ -17,6 +17,8 @@ from src.tools.scan_repo import scan_repo as _scan_repo
 from src.tools.term_correct import term_correct as _term_correct
 from src.tools.memory_feedback import memory_feedback as _memory_feedback
 from src.tools.codebook_explore import codebook_explore as _codebook_explore
+from src.tools._repo_cache import repo_cache
+from src.watcher import watch_daemon
 
 # ── 日志配置 ──────────────────────────────────────────────
 structlog.configure(
@@ -266,6 +268,54 @@ async def codebook(
         code_snippet=code_snippet,
         role=role.value,
     )
+
+
+@mcp.tool()
+async def watch_repo(repo_url: str) -> dict:
+    """开始监听仓库文件变更，自动增量更新代码分析缓存。
+
+    需要先 scan_repo 过的仓库才能启用。文件变更时自动重新解析变更的文件，
+    无需手动重新扫描。适合 IDE 集成场景。
+
+    需要安装 watchfiles: pip install watchfiles
+
+    Args:
+        repo_url: 已扫描过的仓库地址。
+    """
+    logger.info("tool.watch_repo", repo_url=repo_url)
+    ctx = repo_cache.get(repo_url)
+    if ctx is None:
+        return {"status": "error", "message": "请先使用 scan_repo 扫描该仓库"}
+
+    msg = await watch_daemon.start_watching(
+        repo_url=repo_url,
+        repo_path=ctx.clone_result.repo_path,
+        debounce_ms=settings.watch_debounce_ms,
+    )
+    return {"status": "ok", "message": msg}
+
+
+@mcp.tool()
+async def stop_watch(repo_url: str) -> dict:
+    """停止监听仓库文件变更。
+
+    Args:
+        repo_url: 正在监听的仓库地址。
+    """
+    logger.info("tool.stop_watch", repo_url=repo_url)
+    msg = await watch_daemon.stop_watching(repo_url)
+    return {"status": "ok", "message": msg}
+
+
+@mcp.tool()
+async def watch_status() -> dict:
+    """查看所有活跃的文件监听状态。"""
+    watchers = watch_daemon.get_all_status()
+    return {
+        "status": "ok",
+        "active_watchers": len(watchers),
+        "watchers": watchers,
+    }
 
 
 # ── 入口 ─────────────────────────────────────────────────

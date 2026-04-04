@@ -39,8 +39,12 @@ from src.summarizer.engine import (
     generate_local_chapter,
 )
 from src.tools._repo_cache import repo_cache
+from src.watcher import file_hasher
 
 logger = structlog.get_logger()
+
+# 增量扫描阈值：变更文件占比低于此值时走增量路径
+_INCREMENTAL_THRESHOLD = 0.3
 
 # ── 常量 ─────────────────────────────────────────────────
 
@@ -51,6 +55,11 @@ _GROUP_TIMEOUT = 30
 _GRAPH_TIMEOUT = 30
 _SUMMARY_TIMEOUT = 30
 _CHAPTER_TIMEOUT = 60
+
+
+def _repo_hash(repo_url: str) -> str:
+    """与 ProjectMemory 一致的 repo_url 哈希。"""
+    return hashlib.sha256(repo_url.encode()).hexdigest()[:16]
 
 
 # ── 辅助函数 ─────────────────────────────────────────────
@@ -405,36 +414,136 @@ async def scan_repo(
             ),
         )
 
-    # ── Step 2: Parse ────────────────────────────────────
-    step_start = time.time()
-    logger.info("scan_repo.step2_parse.start", files=len(code_files))
+    # ── 增量扫描检测 ─────────────────────────────────────
+    rh = _repo_hash(repo_url)
+    old_snapshot = file_hasher.load_snapshot(rh)
+    new_snapshot = file_hasher.snapshot(clone_result.files)
+    _used_incremental = False
 
-    try:
-        parse_results: list[ParseResult] = await asyncio.wait_for(
-            parse_all(code_files),
-            timeout=_PARSE_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        logger.error(
-            "scan_repo.parse_timeout", files=len(code_files), timeout=_PARSE_TIMEOUT,
-        )
-        return _make_error(
-            error=f"代码解析超时（{_PARSE_TIMEOUT} 秒，{len(code_files)} 个文件）",
-            hint="项目文件过多导致解析超时。可尝试只扫描核心目录。",
-        )
-    except Exception as e:
-        logger.error("scan_repo.parse_failed", error=str(e))
-        return _make_error(
-            error=f"代码解析失败：{e}",
-            hint="解析过程中出错。可能是文件编码问题或不支持的语言。",
+    if old_snapshot is not None and repo_cache.has(repo_url):
+        changes = file_hasher.diff(old_snapshot, new_snapshot)
+        change_ratio = changes.total / max(len(new_snapshot), 1)
+
+        if not changes.is_empty and change_ratio < _INCREMENTAL_THRESHOLD:
+            logger.info(
+                "scan_repo.incremental.start",
+                changed=changes.total,
+                total=len(new_snapshot),
+                ratio=round(change_ratio, 3),
+            )
+            try:
+                updated_ctx = await repo_cache.update_incremental(repo_url, changes)
+                if updated_ctx is not None:
+                    file_hasher.save_snapshot(rh, new_snapshot)
+                    logger.info("scan_repo.incremental.success", repo_url=repo_url)
+                    # 使用增量结果，跳过 Step 2-4
+                    parse_results = updated_ctx.parse_results
+                    modules = updated_ctx.modules
+                    dep_graph = updated_ctx.dep_graph
+                    step_times["incremental"] = round(time.time() - step_start, 2)
+                    _used_incremental = True
+            except Exception as e:
+                logger.warning("scan_repo.incremental.failed", error=str(e))
+        elif changes.is_empty:
+            logger.info("scan_repo.incremental.no_changes", repo_url=repo_url)
+        else:
+            logger.info(
+                "scan_repo.incremental.too_many_changes",
+                ratio=round(change_ratio, 3),
+            )
+
+    # ── Step 2-4: Full Parse (skipped if incremental succeeded) ──
+    if not _used_incremental:
+        # ── Step 2: Parse ────────────────────────────────────
+        step_start = time.time()
+        logger.info("scan_repo.step2_parse.start", files=len(code_files))
+
+        try:
+            parse_results: list[ParseResult] = await asyncio.wait_for(
+                parse_all(code_files),
+                timeout=_PARSE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "scan_repo.parse_timeout", files=len(code_files), timeout=_PARSE_TIMEOUT,
+            )
+            return _make_error(
+                error=f"代码解析超时（{_PARSE_TIMEOUT} 秒，{len(code_files)} 个文件）",
+                hint="项目文件过多导致解析超时。可尝试只扫描核心目录。",
+            )
+        except Exception as e:
+            logger.error("scan_repo.parse_failed", error=str(e))
+            return _make_error(
+                error=f"代码解析失败：{e}",
+                hint="解析过程中出错。可能是文件编码问题或不支持的语言。",
+            )
+
+        step_times["parse"] = round(time.time() - step_start, 2)
+        logger.info(
+            "scan_repo.step2_parse.done",
+            parsed=len(parse_results),
+            seconds=step_times["parse"],
         )
 
+        # ── Step 3: Module Grouping ──────────────────────────
+        step_start = time.time()
+        logger.info("scan_repo.step3_group.start")
+
+        try:
+            modules: list[ModuleGroup] = await asyncio.wait_for(
+                group_modules(parse_results, clone_result.repo_path),
+                timeout=_GROUP_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.error("scan_repo.group_timeout", timeout=_GROUP_TIMEOUT)
+            return _make_error(
+                error=f"模块分组超时（{_GROUP_TIMEOUT} 秒）",
+                hint="项目结构过于复杂，分组耗时过长。",
+            )
+        except Exception as e:
+            logger.error("scan_repo.group_failed", error=str(e))
+            return _make_error(error=f"模块分组失败：{e}")
+
+        step_times["group"] = round(time.time() - step_start, 2)
+        logger.info(
+            "scan_repo.step3_group.done",
+            modules=len(modules),
+            seconds=step_times["group"],
+        )
+
+        # ── Step 4: Dependency Graph ─────────────────────────
+        step_start = time.time()
+        logger.info("scan_repo.step4_graph.start")
+
+        try:
+            dep_graph = DependencyGraph()
+            dep_graph.build(parse_results)
+            node_map = build_node_module_map(modules, parse_results)
+            dep_graph.set_module_groups(node_map)
+        except Exception as e:
+            logger.error("scan_repo.graph_failed", error=str(e))
+            return _make_error(
+                error=f"依赖图构建失败：{e}",
+                hint="构建代码依赖关系时出错，可能是项目结构不规范。",
+            )
+
+        step_times["graph"] = round(time.time() - step_start, 2)
+        logger.info(
+            "scan_repo.step4_graph.done",
+            nodes=dep_graph.graph.number_of_nodes(),
+            edges=dep_graph.graph.number_of_edges(),
+            seconds=step_times["graph"],
+        )
+
+        # 保存文件指纹快照（供下次增量扫描使用）
+        file_hasher.save_snapshot(rh, new_snapshot)
+
+    # ── 统计数据（增量和全量都需要）─────────────────────
     total_funcs = sum(len(r.functions) for r in parse_results)
     total_classes = sum(len(r.classes) for r in parse_results)
     total_imports = sum(len(r.imports) for r in parse_results)
     total_calls = sum(len(r.calls) for r in parse_results)
 
-    # M1: 解析质量统计
     parse_quality = {
         "native": sum(1 for r in parse_results if r.parse_method == "native"),
         "full": sum(1 for r in parse_results if r.parse_method == "full"),
@@ -446,73 +555,7 @@ async def scan_repo(
         sum(r.parse_confidence for r in parse_results) / len(parse_results)
         if parse_results else 1.0
     )
-
-    step_times["parse"] = round(time.time() - step_start, 2)
-    logger.info(
-        "scan_repo.step2_parse.done",
-        parsed=len(parse_results),
-        functions=total_funcs,
-        classes=total_classes,
-        imports=total_imports,
-        calls=total_calls,
-        parse_quality=parse_quality,
-        seconds=step_times["parse"],
-    )
-
-    # ── Step 3: Module Grouping ──────────────────────────
-    step_start = time.time()
-    logger.info("scan_repo.step3_group.start")
-
-    try:
-        modules: list[ModuleGroup] = await asyncio.wait_for(
-            group_modules(parse_results, clone_result.repo_path),
-            timeout=_GROUP_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        logger.error("scan_repo.group_timeout", timeout=_GROUP_TIMEOUT)
-        return _make_error(
-            error=f"模块分组超时（{_GROUP_TIMEOUT} 秒）",
-            hint="项目结构过于复杂，分组耗时过长。",
-        )
-    except Exception as e:
-        logger.error("scan_repo.group_failed", error=str(e))
-        return _make_error(error=f"模块分组失败：{e}")
-
-    step_times["group"] = round(time.time() - step_start, 2)
     biz_modules = [m for m in modules if not m.is_special]
-    special_modules = [m for m in modules if m.is_special]
-    logger.info(
-        "scan_repo.step3_group.done",
-        business_modules=len(biz_modules),
-        special_modules=len(special_modules),
-        seconds=step_times["group"],
-    )
-
-    # ── Step 4: Dependency Graph ─────────────────────────
-    step_start = time.time()
-    logger.info("scan_repo.step4_graph.start")
-
-    try:
-        dep_graph = DependencyGraph()
-        dep_graph.build(parse_results)
-        node_map = build_node_module_map(modules, parse_results)
-        dep_graph.set_module_groups(node_map)
-    except Exception as e:
-        logger.error("scan_repo.graph_failed", error=str(e))
-        return _make_error(
-            error=f"依赖图构建失败：{e}",
-            hint="构建代码依赖关系时出错，可能是项目结构不规范。",
-        )
-
-    step_times["graph"] = round(time.time() - step_start, 2)
-    logger.info(
-        "scan_repo.step4_graph.done",
-        nodes=dep_graph.graph.number_of_nodes(),
-        edges=dep_graph.graph.number_of_edges(),
-        module_nodes=dep_graph.get_module_graph().number_of_nodes(),
-        module_edges=dep_graph.get_module_graph().number_of_edges(),
-        seconds=step_times["graph"],
-    )
 
     # ── Step 5: Generate Blueprint ───────────────────────
     step_start = time.time()

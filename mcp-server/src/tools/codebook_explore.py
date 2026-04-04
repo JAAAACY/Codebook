@@ -378,6 +378,7 @@ async def codebook_explore(
         selection_strategy=selection_strategy,
         query=query,
         role=role,
+        repo_url=repo_url,
     )
 
     total_time = round(time.time() - total_start, 2)
@@ -417,11 +418,19 @@ def _build_report_data(
     selection_strategy: str,
     query: str,
     role: str,
+    repo_url: str = "",
 ) -> dict[str, Any]:
     """组装交互式报告所需的结构化数据。
 
     这份数据会被传给前端（HTML/React），生成可点击展开的交互式页面。
     """
+    # 尝试从缓存获取依赖图（用于交互式邻接数据）
+    dep_graph = None
+    if repo_url:
+        ctx = repo_cache.get(repo_url)
+        if ctx and hasattr(ctx, "dep_graph"):
+            dep_graph = ctx.dep_graph
+
     # 项目概览卡
     overview = {
         "project_overview": scan.get("project_overview", ""),
@@ -449,6 +458,11 @@ def _build_report_data(
             "used_by": mod.get("used_by", []),
             "is_selected": name in selected_modules,
         }
+
+        # 交互式蓝图数据：邻接关系 + 函数调用链
+        if dep_graph is not None:
+            card["adjacency"] = dep_graph.get_node_adjacency(name)
+            card["call_chains"] = dep_graph.get_function_call_chain(name)
 
         # 如果有深入阅读的数据，嵌入进去
         if name in chapters:

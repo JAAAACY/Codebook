@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     app_version: str = "0.5.0"
     log_level: str = "INFO"
 
+    # Watch 模式
+    watch_debounce_ms: int = 500
+    watch_enabled: bool = True
+    incremental_threshold: float = 0.3
+    blueprint_interactive: bool = True
+
     # 仓库扫描
     max_repo_size_mb: int = 100
     clone_timeout_seconds: int = 120

@@ -254,6 +254,90 @@ class DependencyGraph:
 
         return result
 
+    def get_node_adjacency(self, module_name: str) -> dict[str, list[str]]:
+        """返回模块的上下游依赖列表。
+
+        Args:
+            module_name: 模块名（module_group 级别）。
+
+        Returns:
+            {"upstream": [调用本模块的模块], "downstream": [本模块调用的模块]}
+        """
+        mg = self.get_module_graph()
+        if module_name not in mg:
+            return {"upstream": [], "downstream": []}
+        return {
+            "upstream": sorted(mg.predecessors(module_name)),
+            "downstream": sorted(mg.successors(module_name)),
+        }
+
+    def get_function_call_chain(
+        self, module_name: str, depth: int = 2,
+    ) -> list[dict[str, str]]:
+        """返回模块内函数的调用链信息。
+
+        Args:
+            module_name: 模块名。
+            depth: 追踪深度（向上/向下各几跳）。
+
+        Returns:
+            [{
+                "function": 函数名,
+                "file": 文件路径,
+                "line_start": 起始行,
+                "callers": [调用者函数名],
+                "callees": [被调函数名],
+            }]
+        """
+        results: list[dict] = []
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("module_group") != module_name:
+                continue
+            if data.get("node_type") == "module":
+                continue
+
+            label = data.get("label", node_id.split("::")[-1])
+
+            # 收集调用者（上游）
+            callers: list[str] = []
+            frontier = [node_id]
+            for _ in range(depth):
+                next_frontier: list[str] = []
+                for nid in frontier:
+                    for pred in self.graph.predecessors(nid):
+                        pred_label = self.graph.nodes[pred].get("label", pred.split("::")[-1])
+                        pred_mod = self.graph.nodes[pred].get("module_group", "")
+                        display = f"{pred_mod}/{pred_label}" if pred_mod else pred_label
+                        if display not in callers:
+                            callers.append(display)
+                        next_frontier.append(pred)
+                frontier = next_frontier
+
+            # 收集被调用者（下游）
+            callees: list[str] = []
+            frontier = [node_id]
+            for _ in range(depth):
+                next_frontier = []
+                for nid in frontier:
+                    for succ in self.graph.successors(nid):
+                        succ_label = self.graph.nodes[succ].get("label", succ.split("::")[-1])
+                        succ_mod = self.graph.nodes[succ].get("module_group", "")
+                        display = f"{succ_mod}/{succ_label}" if succ_mod else succ_label
+                        if display not in callees:
+                            callees.append(display)
+                        next_frontier.append(succ)
+                frontier = next_frontier
+
+            results.append({
+                "function": label,
+                "file": data.get("file", ""),
+                "line_start": data.get("line_start", 0),
+                "callers": callers,
+                "callees": callees,
+            })
+
+        return results
+
     def to_mermaid(
         self,
         level: str = "module",
