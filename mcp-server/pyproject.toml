@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codebook-mcp"
-version = "0.2.0"
+version = "0.5.0"
 description = "CodeBook — 让不会写代码的人也能理解、诊断和修改软件产品。一键安装的 MCP Server。"
 readme = "README.md"
 requires-python = ">=3.10"

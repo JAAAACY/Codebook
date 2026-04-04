@@ -25,6 +25,7 @@ pytest-cache-files-*/
 
 # Cloned repos (large, should not be committed)
 repos/
+mcp-server/Codebook/
 .~lock.*
 
 # ── 非核心文件（本地保留，不进 git）──────────────

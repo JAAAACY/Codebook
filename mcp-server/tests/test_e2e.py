@@ -640,7 +640,7 @@ class TestMCPToolRegistration:
         from src.config import settings
 
         assert settings.app_name == "CodeBook"
-        assert settings.app_version == "0.1.0"
+        assert settings.app_version == "0.5.0"
         assert "python" in settings.supported_languages
 
 

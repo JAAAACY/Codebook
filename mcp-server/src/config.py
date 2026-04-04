@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     """应用配置，支持环境变量和 .env 文件。"""
 
     app_name: str = "CodeBook"
-    app_version: str = "0.1.0"
+    app_version: str = "0.5.0"
     log_level: str = "INFO"
 
     # 仓库扫描
