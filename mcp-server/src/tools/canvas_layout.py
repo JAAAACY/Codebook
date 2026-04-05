@@ -87,83 +87,187 @@ def _health_color(health: float) -> str:
     return "#ef4444"  # red
 
 
-# ── Overview layout (topological layering) ────────────────
+# ── Overview layout (core path + collapsed groups) ───────
+
+# 主线最多展示多少个核心模块
+_MAX_CORE_NODES = 8
+
+
+def _score_modules(
+    modules: list[dict[str, Any]],
+    connections: list[dict[str, Any]],
+) -> dict[str, float]:
+    """为每个模块打分，分数越高越核心。
+
+    评分因素��
+    - 连接度（in + out 边数）权重最高
+    - 代码量（line_count）作为辅助
+    - 被依赖数（used_by）比依赖数（depends_on）更重要
+    """
+    ids = {m["id"] for m in modules}
+    out_degree: dict[str, int] = defaultdict(int)
+    in_degree: dict[str, int] = defaultdict(int)
+
+    for c in connections:
+        src, dst = c.get("from", ""), c.get("to", "")
+        if src in ids and dst in ids:
+            out_degree[src] += 1
+            in_degree[dst] += 1
+
+    scores: dict[str, float] = {}
+    for m in modules:
+        mid = m["id"]
+        # 被调用（入度）× 2 + 调用别人（出度）× 1
+        connectivity = in_degree.get(mid, 0) * 2 + out_degree.get(mid, 0)
+        scores[mid] = connectivity
+    return scores
+
+
+def _select_core_modules(
+    modules: list[dict[str, Any]],
+    connections: list[dict[str, Any]],
+    max_core: int = _MAX_CORE_NODES,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """将模块分为核心模块和折叠组。
+
+    Returns:
+        (core_modules, collapsed_groups, core_connections)
+        collapsed_groups 是 [{"id": "group_xxx", "label": "其他 (N 个模块)", ...}]
+    """
+    if len(modules) <= max_core:
+        return modules, [], connections
+
+    scores = _score_modules(modules, connections)
+    sorted_mods = sorted(modules, key=lambda m: scores.get(m["id"], 0), reverse=True)
+
+    core = sorted_mods[:max_core]
+    peripheral = sorted_mods[max_core:]
+
+    core_ids = {m["id"] for m in core}
+
+    # 将非核心模块按顶层目录分组
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for m in peripheral:
+        path = m["id"]
+        top = path.split("/")[0] if "/" in path else "other"
+        groups[top].append(m)
+
+    collapsed: list[dict] = []
+    for group_name, members in groups.items():
+        collapsed.append({
+            "id": f"__group_{group_name}",
+            "label": f"{group_name} ({len(members)} 个模块)",
+            "description": "双击展开查看详情",
+            "health": 0.7,
+            "is_group": True,
+            "member_ids": [m["id"] for m in members],
+        })
+
+    # 过滤连接：只保留核心模块间的 + 核心到折叠组的
+    peripheral_to_group = {}
+    for g in collapsed:
+        for mid in g["member_ids"]:
+            peripheral_to_group[mid] = g["id"]
+
+    core_connections = []
+    group_edge_seen: set[tuple[str, str]] = set()
+    for c in connections:
+        src, dst = c.get("from", ""), c.get("to", "")
+        # 核心 → 核心：保留
+        if src in core_ids and dst in core_ids:
+            core_connections.append(c)
+        # 核心 → 折叠组：聚合
+        elif src in core_ids and dst in peripheral_to_group:
+            gid = peripheral_to_group[dst]
+            key = (src, gid)
+            if key not in group_edge_seen:
+                group_edge_seen.add(key)
+                core_connections.append({"from": src, "to": gid, "verb": "调用", "call_count": 1})
+        # 折叠组 → 核心：聚合
+        elif src in peripheral_to_group and dst in core_ids:
+            gid = peripheral_to_group[src]
+            key = (gid, dst)
+            if key not in group_edge_seen:
+                group_edge_seen.add(key)
+                core_connections.append({"from": gid, "to": dst, "verb": "调用", "call_count": 1})
+
+    return core, collapsed, core_connections
 
 
 def layout_overview(
     modules: list[dict[str, Any]],
     connections: list[dict[str, Any]],
 ) -> tuple[list[OverviewNode], list[OverviewEdge]]:
-    """Lay out module nodes using topological layering (Kahn's algorithm variant).
+    """布局 Overview 页：核心模块 + 折叠组。
 
-    Nodes with no in-edges appear in the leftmost column; each subsequent layer
-    contains nodes whose dependencies are all in earlier layers.
+    只展示最核心的 5-8 个模块（按连接度排序），
+    其余折叠为分组节点。连线只保留主线。
 
     Returns (nodes, edges) with computed (x, y) coordinates.
     """
-    # Build adjacency and in-degree maps
-    ids = {m["id"] for m in modules}
+    if not modules:
+        return [], []
+
+    core, collapsed, core_conns = _select_core_modules(modules, connections)
+    all_display = core + collapsed
+
+    # 构建拓扑分层
+    ids = {m["id"] for m in all_display}
     adjacency: dict[str, list[str]] = defaultdict(list)
-    in_degree: dict[str, int] = {mid: 0 for mid in ids}
+    in_deg: dict[str, int] = {mid: 0 for mid in ids}
 
-    # Edge semantics: "from" depends on "to" (importer → dependency).
-    # We want dependencies on the LEFT, so build the DAG as dependency → dependent
-    # (i.e., reverse the connection direction for topological ordering).
-    for conn in connections:
-        dependent, dependency = conn["from"], conn["to"]
-        if dependent in ids and dependency in ids:
-            adjacency[dependency].append(dependent)
-            in_degree[dependent] = in_degree.get(dependent, 0) + 1
+    for conn in core_conns:
+        src, dst = conn.get("from", ""), conn.get("to", "")
+        if src in ids and dst in ids:
+            adjacency[dst].append(src)
+            in_deg[src] = in_deg.get(src, 0) + 1
 
-    # Kahn's algorithm — assign layers
-    queue: deque[str] = deque(mid for mid, deg in in_degree.items() if deg == 0)
+    # Kahn's algorithm
+    queue: deque[str] = deque(mid for mid, deg in in_deg.items() if deg == 0)
     layers: list[list[str]] = []
     visited: set[str] = set()
 
     while queue:
-        layer = list(queue)
+        layer = sorted(queue)  # 稳定排序
         layers.append(layer)
         visited.update(layer)
         next_queue: deque[str] = deque()
-        for node_id in layer:
-            for neighbor in adjacency.get(node_id, []):
-                in_degree[neighbor] -= 1
-                if in_degree[neighbor] == 0 and neighbor not in visited:
+        for nid in layer:
+            for neighbor in adjacency.get(nid, []):
+                in_deg[neighbor] -= 1
+                if in_deg[neighbor] == 0 and neighbor not in visited:
                     next_queue.append(neighbor)
         queue = next_queue
 
-    # Handle cycles — remaining nodes go into an extra layer
-    remaining = [mid for mid in ids if mid not in visited]
+    remaining = sorted(mid for mid in ids if mid not in visited)
     if remaining:
         layers.append(remaining)
 
-    # Assign coordinates
-    # Note: "from" in connections means the *dependent* (importer), and "to" is the
-    # dependency.  Kahn's starts from nodes with in_degree==0, which are the
-    # dependencies (the targets of edges).  We want dependencies on the LEFT, so
-    # layer 0 (in_degree==0 nodes) gets the smallest x — which is already the case.
-    module_map = {m["id"]: m for m in modules}
+    # 坐标分配
+    module_map = {m["id"]: m for m in all_display}
     result_nodes: list[OverviewNode] = []
 
     for col, layer in enumerate(layers):
         x = _OV_MARGIN + col * (_OV_NODE_W + _OV_H_GAP)
-        for row, node_id in enumerate(layer):
-            y = _OV_MARGIN + row * (_OV_NODE_H + _OV_V_GAP)
-            m = module_map[node_id]
+        total_h = len(layer) * _OV_NODE_H + (len(layer) - 1) * _OV_V_GAP
+        start_y = _OV_MARGIN + max(0, (400 - total_h) // 2)
+
+        for row, nid in enumerate(layer):
+            y = start_y + row * (_OV_NODE_H + _OV_V_GAP)
+            m = module_map[nid]
             health = m.get("health", 0.5)
             result_nodes.append(
                 OverviewNode(
-                    id=node_id,
+                    id=nid,
                     label=m["label"],
                     description=m.get("description", ""),
                     health=health,
-                    color=_health_color(health),
+                    color="#3a3f55" if m.get("is_group") else _health_color(health),
                     x=x,
                     y=y,
                 )
             )
 
-    # Build edges
     result_edges = [
         OverviewEdge(
             from_id=c["from"],
@@ -171,7 +275,7 @@ def layout_overview(
             verb=c.get("verb", ""),
             call_count=c.get("call_count", 0),
         )
-        for c in connections
+        for c in core_conns
     ]
 
     return result_nodes, result_edges
