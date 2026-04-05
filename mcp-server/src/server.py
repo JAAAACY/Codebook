@@ -18,6 +18,8 @@ from src.tools.term_correct import term_correct as _term_correct
 from src.tools.memory_feedback import memory_feedback as _memory_feedback
 from src.tools.codebook_explore import codebook_explore as _codebook_explore
 from src.tools._repo_cache import repo_cache
+from src.tools.summarize_for_blueprint import summarize_for_blueprint as _summarize_for_blueprint
+from src.tools.save_blueprint_summary import save_blueprint_summary as _save_blueprint_summary
 from src.watcher import watch_daemon
 
 # ── 日志配置 ──────────────────────────────────────────────
@@ -316,6 +318,37 @@ async def watch_status() -> dict:
         "active_watchers": len(watchers),
         "watchers": watchers,
     }
+
+
+@mcp.tool()
+async def summarize_for_blueprint(repo_url: str) -> dict:
+    """获取蓝图摘要的 LLM 上下文（蓝图摘要第一步）。
+
+    在 scan_repo 扫描完成后调用此工具，获取代码结构上下文供 LLM 推理。
+    返回的 prompt + modules + connections 是 LLM 生成蓝图摘要的输入。
+    LLM 推理完成后，请调用 save_blueprint_summary 保存结果。
+
+    Args:
+        repo_url: 已扫描过的仓库地址（与 scan_repo 使用的地址一致）。
+    """
+    logger.info("tool.summarize_for_blueprint", repo_url=repo_url)
+    return await _summarize_for_blueprint(repo_url=repo_url)
+
+
+@mcp.tool()
+async def save_blueprint_summary(repo_url: str, summary_json: dict) -> dict:
+    """保存 LLM 生成的蓝图摘要（蓝图摘要第二步）。
+
+    接收 LLM 根据 summarize_for_blueprint 返回的上下文推理生成的
+    蓝图摘要 JSON，解析并持久化到本地记忆系统。
+    如果 JSON 格式不符合要求，会自动降级为规则生成的摘要。
+
+    Args:
+        repo_url: 已扫描过的仓库地址。
+        summary_json: LLM 推理结果，需符合 BlueprintSummary schema。
+    """
+    logger.info("tool.save_blueprint_summary", repo_url=repo_url)
+    return await _save_blueprint_summary(repo_url=repo_url, summary_json=summary_json)
 
 
 # ── 入口 ─────────────────────────────────────────────────
