@@ -495,6 +495,24 @@ def _build_report_data(
             "mermaid": health.get("mermaid_diagram", ""),
         }
 
+    # ── 蓝图摘要：缓存优先，降级自动生成 ──────────────────
+    blueprint_summary = None
+    if repo_url:
+        blueprint_summary = repo_cache.get_blueprint_summary(repo_url)
+    if blueprint_summary is None and repo_url:
+        try:
+            from src.summarizer.blueprint_summary import build_fallback_summary
+
+            ctx = repo_cache.get(repo_url)
+            if ctx is not None:
+                summary_obj = build_fallback_summary(ctx)
+                blueprint_summary = summary_obj.to_dict()
+        except Exception as exc:
+            logger.warning(
+                "codebook_explore.blueprint_summary_fallback_failed",
+                error=str(exc),
+            )
+
     return {
         "overview": overview,
         "module_cards": module_cards,
@@ -503,4 +521,5 @@ def _build_report_data(
         "selection_strategy": selection_strategy,
         "query": query,
         "role": role,
+        "blueprint_summary": blueprint_summary,
     }

@@ -202,6 +202,21 @@ class RepoCache:
         )
         return updated_ctx
 
+    def get_blueprint_summary(self, repo_url: str) -> dict | None:
+        """加载已缓存的蓝图摘要。"""
+        import hashlib
+        import json
+        from pathlib import Path
+
+        repo_hash = hashlib.sha256(repo_url.encode()).hexdigest()[:16]
+        path = Path.home() / ".codebook" / "memory" / repo_hash / "blueprint_summary.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+
     def clear(self) -> None:
         """仅清除内存缓存（不删磁盘文件）。"""
         logger.debug("repo_cache.clearing_memory_cache")
