@@ -426,10 +426,14 @@ def _build_report_data(
     """
     # 尝试从缓存获取依赖图（用于交互式邻接数据）
     dep_graph = None
+    flows_result = None
     if repo_url:
         ctx = repo_cache.get(repo_url)
         if ctx and hasattr(ctx, "dep_graph"):
             dep_graph = ctx.dep_graph
+        if ctx:
+            from src.summarizer.flow_extractor import extract_flows
+            flows_result = extract_flows(ctx)
 
     # 项目概览卡
     overview = {
@@ -505,7 +509,7 @@ def _build_report_data(
 
             ctx = repo_cache.get(repo_url)
             if ctx is not None:
-                summary_obj = build_fallback_summary(ctx)
+                summary_obj = build_fallback_summary(ctx, flows_result=flows_result)
                 blueprint_summary = summary_obj.to_dict()
         except Exception as exc:
             logger.warning(
@@ -522,4 +526,5 @@ def _build_report_data(
         "query": query,
         "role": role,
         "blueprint_summary": blueprint_summary,
+        "flows": flows_result.to_dict() if flows_result else None,
     }

@@ -114,6 +114,12 @@ class FlowStep:
     _line_start: int = 0
     _module: str = ""
 
+    def to_dict(self) -> dict:
+        """序列化为纯 dict（仅包含面向用户的字段）。"""
+        return {
+            "business_description": self.business_description,
+        }
+
 
 @dataclass
 class BusinessFlow:
@@ -125,6 +131,16 @@ class BusinessFlow:
     importance: float = 0.0  # 重要程度 0-1（用于排序）
     branch_flows: list["BusinessFlow"] = field(default_factory=list)
 
+    def to_dict(self) -> dict:
+        """序列化为纯 dict。"""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "steps": [s.to_dict() for s in self.steps],
+            "importance": self.importance,
+            "branch_flows": [b.to_dict() for b in self.branch_flows],
+        }
+
 
 @dataclass
 class FlowExtractionResult:
@@ -134,6 +150,15 @@ class FlowExtractionResult:
     project_description: str = ""
     main_flows: list[BusinessFlow] = field(default_factory=list)
     coverage: float = 0.0  # 主线覆盖了多少比例的核心函数
+
+    def to_dict(self) -> dict:
+        """序列化为纯 dict。"""
+        return {
+            "project_name": self.project_name,
+            "project_description": self.project_description,
+            "main_flows": [f.to_dict() for f in self.main_flows],
+            "coverage": self.coverage,
+        }
 
 
 # ── 核心函数 ─────────────────────────────────────────────────

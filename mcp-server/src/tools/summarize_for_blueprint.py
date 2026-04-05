@@ -34,11 +34,15 @@ async def summarize_for_blueprint(repo_url: str) -> dict:
             "message": "请先使用 scan_repo 扫描该仓库",
         }
 
+    # 提取业务流程
+    from src.summarizer.flow_extractor import extract_flows
+    flows_result = extract_flows(ctx)
+
     # 组装 LLM 上下文
-    llm_context = build_summary_context(ctx)
+    llm_context = build_summary_context(ctx, flows_result=flows_result)
 
     # 生成降级摘要（作为兜底）
-    fallback = build_fallback_summary(ctx)
+    fallback = build_fallback_summary(ctx, flows_result=flows_result)
 
     logger.info(
         "summarize_for_blueprint.context_ready",

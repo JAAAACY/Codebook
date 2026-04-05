@@ -29,9 +29,19 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.summarizer.engine import SummaryContext
+    from src.summarizer.flow_extractor import FlowExtractionResult
 
 
 # ── 数据模型 ─────────────────────────────────────────────────
+
+
+@dataclass
+class FlowNarrative:
+    """一条业务流程的叙事描述。"""
+
+    name: str
+    description: str
+    steps: list[str] = field(default_factory=list)  # 纯业务语言步骤描述
 
 
 @dataclass
@@ -78,6 +88,7 @@ class BlueprintSummary:
     project_description: str
     modules: list[ModuleSummary] = field(default_factory=list)
     connections: list[ConnectionSummary] = field(default_factory=list)
+    flows: list[FlowNarrative] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为纯 dict（可直接 json.dumps）。"""
@@ -116,6 +127,14 @@ class BlueprintSummary:
                 }
                 for c in self.connections
             ],
+            "flows": [
+                {
+                    "name": fl.name,
+                    "description": fl.description,
+                    "steps": list(fl.steps),
+                }
+                for fl in self.flows
+            ],
         }
 
 
@@ -134,7 +153,10 @@ def _assess_health(total_lines: int) -> str:
 # ── build_fallback_summary ───────────────────────────────────
 
 
-def build_fallback_summary(ctx: SummaryContext) -> BlueprintSummary:
+def build_fallback_summary(
+    ctx: SummaryContext,
+    flows_result: FlowExtractionResult | None = None,
+) -> BlueprintSummary:
     """使用 business_namer 规则生成降级蓝图摘要（无需 LLM）。
 
     跳过 is_special 的模块。为每个模块和函数生成中文名称与描述。
@@ -235,11 +257,22 @@ def build_fallback_summary(ctx: SummaryContext) -> BlueprintSummary:
     # 项目名：从 repo_url 推断或使用目录名
     project_name = _infer_project_name(ctx)
 
+    # 流程叙事（降级：直接使用 flow_extractor 的结果）
+    flows: list[FlowNarrative] = []
+    if flows_result is not None:
+        for flow in flows_result.main_flows:
+            flows.append(FlowNarrative(
+                name=flow.name,
+                description=flow.description,
+                steps=[s.business_description for s in flow.steps],
+            ))
+
     return BlueprintSummary(
         project_name=project_name,
         project_description=f"{project_name} 项目蓝图（规则降级）",
         modules=module_summaries,
         connections=connections,
+        flows=flows,
     )
 
 
@@ -254,11 +287,14 @@ def _infer_project_name(ctx: SummaryContext) -> str:
 # ── build_summary_context ────────────────────────────────────
 
 
-def build_summary_context(ctx: SummaryContext) -> dict[str, Any]:
+def build_summary_context(
+    ctx: SummaryContext,
+    flows_result: FlowExtractionResult | None = None,
+) -> dict[str, Any]:
     """组装 LLM 上下文：modules 数据 + prompt 指令。
 
     Returns:
-        dict with keys: "modules", "connections", "prompt"
+        dict with keys: "modules", "connections", "prompt", "flows"
     """
     modules_data: list[dict[str, Any]] = []
     module_graph = ctx.dep_graph.get_module_graph()
@@ -309,18 +345,37 @@ def build_summary_context(ctx: SummaryContext) -> dict[str, Any]:
                 "call_count": data.get("call_count", 1),
             })
 
-    prompt = _build_llm_prompt(modules_data, connections_data)
+    # 流程骨架（供 LLM 理解项目结构）
+    flows_data: list[dict[str, Any]] = []
+    if flows_result is not None:
+        for flow in flows_result.main_flows:
+            flow_data: dict[str, Any] = {
+                "entry_function": flow.steps[0]._func_name if flow.steps else "",
+                "steps": [
+                    {
+                        "func_name": s._func_name,
+                        "module": s._module,
+                        "current_description": s.business_description,
+                    }
+                    for s in flow.steps
+                ],
+            }
+            flows_data.append(flow_data)
+
+    prompt = _build_llm_prompt(modules_data, connections_data, flows_data)
 
     return {
         "modules": modules_data,
         "connections": connections_data,
         "prompt": prompt,
+        "flows": flows_data,
     }
 
 
 def _build_llm_prompt(
     modules: list[dict[str, Any]],
     connections: list[dict[str, Any]],
+    flows: list[dict[str, Any]] | None = None,
 ) -> str:
     """构建发送给 LLM 的中文指令 prompt。"""
     module_list = "\n".join(
@@ -333,7 +388,7 @@ def _build_llm_prompt(
         for c in connections
     )
 
-    return (
+    base_prompt = (
         "你是一个软件架构分析助手。请根据以下代码结构信息，为每个模块和函数生成中文业务描述。\n"
         "\n"
         "## 模块列表\n"
@@ -361,6 +416,39 @@ def _build_llm_prompt(
         "- connections: 连接数组，每个连接包含：\n"
         "  - from, to, verb（中文动词）, call_count\n"
     )
+
+    # 如果有流程骨架数据，追加流程叙事指令
+    if flows:
+        flow_lines: list[str] = []
+        for i, f in enumerate(flows, 1):
+            steps_str = " → ".join(
+                s.get("func_name", "?") for s in f.get("steps", [])
+            )
+            flow_lines.append(f"  流程 {i}: {f.get('entry_function', '?')} 开始 — {steps_str}")
+
+        flows_section = "\n".join(flow_lines)
+
+        base_prompt += (
+            "\n"
+            "## 核心执行流程骨架\n"
+            "以下是从代码中提取的核心执行流程，请为每条流程：\n"
+            "1. 取一个业务化的流程名（如「用户消息处理」而不是「main函数流程」）\n"
+            "2. 写一句话流程概述\n"
+            "3. 每个步骤用一句话描述做了什么（纯业务语言，不提及函数名、文件名）\n"
+            "\n"
+            f"{flows_section}\n"
+            "\n"
+            '在返回的 JSON 中新增 "flows" 字段：\n'
+            '"flows": [\n'
+            "  {\n"
+            '    "name": "业务化流程名",\n'
+            '    "description": "一句话概述",\n'
+            '    "steps": ["步骤1描述", "步骤2描述", ...]\n'
+            "  }\n"
+            "]\n"
+        )
+
+    return base_prompt
 
 
 # ── parse_llm_response ───────────────────────────────────────
@@ -416,11 +504,21 @@ def parse_llm_response(response: dict, ctx: SummaryContext) -> BlueprintSummary:
                 )
             )
 
+        # 解析流程叙事
+        flows: list[FlowNarrative] = []
+        for f in response.get("flows", []):
+            flows.append(FlowNarrative(
+                name=f.get("name", ""),
+                description=f.get("description", ""),
+                steps=f.get("steps", []),
+            ))
+
         return BlueprintSummary(
             project_name=project_name,
             project_description=project_description,
             modules=modules,
             connections=connections,
+            flows=flows,
         )
 
     except Exception:
