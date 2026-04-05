@@ -324,6 +324,39 @@ class TestBuildFallbackSummary:
         for conn in result.connections:
             assert conn.verb, f"Connection {conn.from_module}->{conn.to_module} has empty verb"
 
+    def test_health_green_for_small_modules(self):
+        from src.summarizer.blueprint_summary import build_fallback_summary
+
+        ctx = _make_test_context()
+        # Both modules have total_lines < 1000 (80 and 120)
+        result = build_fallback_summary(ctx)
+        for mod in result.modules:
+            assert mod.health == "green", f"Module {mod.code_path} expected green, got {mod.health}"
+
+    def test_health_yellow_for_medium_modules(self):
+        from src.summarizer.blueprint_summary import build_fallback_summary
+
+        ctx = _make_test_context()
+        # Set auth module to 2000 lines (> 1000, < 3000) → yellow
+        for mg in ctx.modules:
+            if mg.name == "auth":
+                mg.total_lines = 2000
+        result = build_fallback_summary(ctx)
+        auth_mod = [m for m in result.modules if "auth" in m.code_path][0]
+        assert auth_mod.health == "yellow"
+
+    def test_health_red_for_large_modules(self):
+        from src.summarizer.blueprint_summary import build_fallback_summary
+
+        ctx = _make_test_context()
+        # Set db module to 5000 lines (> 3000) → red
+        for mg in ctx.modules:
+            if mg.name == "db":
+                mg.total_lines = 5000
+        result = build_fallback_summary(ctx)
+        db_mod = [m for m in result.modules if "db" in m.code_path][0]
+        assert db_mod.health == "red"
+
     def test_special_modules_excluded(self):
         from src.summarizer.blueprint_summary import build_fallback_summary
 
@@ -432,6 +465,30 @@ class TestParseLlmResponse:
         assert isinstance(result, BlueprintSummary)
         # Should still have modules from fallback
         assert len(result.modules) > 0
+
+    def test_valid_json_with_from_to_keys(self):
+        from src.summarizer.blueprint_summary import BlueprintSummary, parse_llm_response
+
+        ctx = _make_test_context()
+        response = {
+            "project_name": "test-project",
+            "project_description": "测试项目",
+            "modules": [],
+            "connections": [
+                {
+                    "from": "auth",
+                    "to": "db",
+                    "verb": "读写数据",
+                    "call_count": 1,
+                },
+            ],
+        }
+
+        result = parse_llm_response(response, ctx)
+        assert isinstance(result, BlueprintSummary)
+        assert len(result.connections) == 1
+        assert result.connections[0].from_module == "auth"
+        assert result.connections[0].to_module == "db"
 
     def test_partial_json_returns_fallback(self):
         from src.summarizer.blueprint_summary import BlueprintSummary, parse_llm_response

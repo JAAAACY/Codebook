@@ -359,14 +359,14 @@ def _build_llm_prompt(
         "  - depends_on: 依赖的模块名列表\n"
         "  - used_by: 被依赖的模块名列表\n"
         "- connections: 连接数组，每个连接包含：\n"
-        "  - from_module, to_module, verb（中文动词）, call_count\n"
+        "  - from, to, verb（中文动词）, call_count\n"
     )
 
 
 # ── parse_llm_response ───────────────────────────────────────
 
 
-def parse_llm_response(response: Any, ctx: SummaryContext) -> BlueprintSummary:
+def parse_llm_response(response: dict, ctx: SummaryContext) -> BlueprintSummary:
     """解析 LLM 返回的 dict，构建 BlueprintSummary。
 
     如果解析失败（类型错误、缺失字段等），自动降级到 build_fallback_summary。
@@ -409,8 +409,8 @@ def parse_llm_response(response: Any, ctx: SummaryContext) -> BlueprintSummary:
         for conn_data in response.get("connections", []):
             connections.append(
                 ConnectionSummary(
-                    from_module=conn_data["from_module"],
-                    to_module=conn_data["to_module"],
+                    from_module=conn_data.get("from", conn_data.get("from_module", "")),
+                    to_module=conn_data.get("to", conn_data.get("to_module", "")),
                     verb=conn_data["verb"],
                     call_count=conn_data.get("call_count", 0),
                 )
