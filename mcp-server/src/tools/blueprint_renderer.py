@@ -694,11 +694,26 @@ def save_blueprint(
     filename = f"{slug}_blueprint_{timestamp}.html"
     filepath = out_dir / filename
 
-    html_content = render_blueprint_html(
-        report_data=report_data,
-        repo_url=repo_url,
-        total_time=total_time,
-    )
+    # 优先使用 v2 画布渲染器（有 blueprint_summary 时）
+    html_content = None
+    if report_data.get("blueprint_summary"):
+        try:
+            from src.tools.blueprint_renderer_v2 import render_blueprint_v2
+            html_content = render_blueprint_v2(
+                report_data=report_data,
+                repo_url=repo_url,
+                total_time=total_time,
+            )
+        except Exception as e:
+            logger.warning("blueprint.v2_failed", error=str(e))
+
+    # 回退到 v1
+    if html_content is None:
+        html_content = render_blueprint_html(
+            report_data=report_data,
+            repo_url=repo_url,
+            total_time=total_time,
+        )
 
     filepath.write_text(html_content, encoding="utf-8")
     logger.info(

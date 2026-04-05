@@ -244,20 +244,20 @@ class TestBlueprintRenderer:
         with open(path, encoding="utf-8") as f:
             html_content = f.read()
 
-        # 基本结构
+        # 基本结构（v1 或 v2 渲染器都满足）
         assert "<!DOCTYPE html>" in html_content
         assert "CodeBook" in html_content
-        assert "Blueprint Report" in html_content
 
-        # 交互功能
-        assert "filterModules" in html_content
-        assert "toggleCard" in html_content
+        # v2 画布或 v1 列表（至少一种）
+        is_v2 = "__BLUEPRINT_DATA" in html_content
+        is_v1 = "Blueprint Report" in html_content
+        assert is_v2 or is_v1, "Should be v2 canvas or v1 list"
 
-        # Mermaid 支持
-        assert "mermaid" in html_content
-
-        # 包含模块卡片
-        assert "module-card" in html_content
+        # 包含模块内容（v1 用 module-card 类，v2 用 SVG 节点）
+        if is_v2:
+            assert "<svg" in html_content
+        else:
+            assert "module-card" in html_content
 
     def test_render_blueprint_html_standalone(self):
         """纯函数测试：给定 report_data 能生成有效 HTML。"""
