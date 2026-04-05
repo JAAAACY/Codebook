@@ -333,7 +333,6 @@ _FUNC_PREFIX_MAP: dict[str, str] = {
     "disable": "禁用",
     "activate": "激活",
     "deactivate": "停用",
-    "subscribe": "订阅",
     "unsubscribe": "退订",
     "benchmark": "基准测试",
     "profile": "性能分析",
@@ -475,11 +474,14 @@ def infer_business_description(
     if file_count > 0 and line_count > 0:
         parts.append(f"共 {file_count} 个文件、{line_count} 行代码")
 
+    _LABEL_SUFFIXES = ("系统", "模块", "引擎", "工具", "服务", "接口", "组件", "平台")
+    suffix = "" if any(module_label.endswith(s) for s in _LABEL_SUFFIXES) else "模块"
+
     if parts:
-        return f"{module_label}模块，{'，'.join(parts)}。"
+        return f"{module_label}{suffix}，{'，'.join(parts)}。"
 
     # Empty module fallback
-    return f"{module_label}模块（空模块，暂无实现）。"
+    return f"{module_label}{suffix}（空模块，暂无实现）。"
 
 
 def infer_function_explanation(

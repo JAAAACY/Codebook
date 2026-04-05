@@ -103,6 +103,8 @@ class TestInferBusinessDescription:
         )
         assert isinstance(desc, str)
         assert len(desc) > 0
+        assert "10" in desc or "文件" in desc, "description should mention file count"
+        assert "5000" in desc or "行" in desc, "description should mention line count"
 
 
 # ---------------------------------------------------------------------------
