@@ -128,3 +128,78 @@ class TestBlueprintRendererV2:
     def test_chat_placeholder(self, rendered_html: str) -> None:
         lower = rendered_html.lower()
         assert "mcp" in lower or "对话" in lower or "chat" in lower
+
+
+class TestBlueprintFlowRendering:
+    """Tests for flow line rendering in blueprint v2."""
+
+    def test_renders_flows_when_available(self) -> None:
+        """When flows data is present, the HTML should contain flow names and steps."""
+        from src.tools.blueprint_renderer_v2 import render_blueprint_v2
+
+        data = _make_report_data()
+        data["blueprint_summary"]["flows"] = [
+            {
+                "name": "主流程",
+                "description": "核心逻辑",
+                "steps": ["步骤1", "步骤2", "步骤3"],
+            }
+        ]
+        html = render_blueprint_v2(data)
+        assert "主流程" in html
+        assert "步骤1" in html
+        assert "步骤2" in html
+        assert "步骤3" in html
+        assert "核心逻辑" in html
+        # Should use renderFlows in init
+        assert "renderFlows" in html
+
+    def test_fallback_to_modules_without_flows(self) -> None:
+        """Without flows, the HTML should fallback to module node rendering."""
+        from src.tools.blueprint_renderer_v2 import render_blueprint_v2
+
+        data = _make_report_data()
+        data["blueprint_summary"]["flows"] = []
+        html = render_blueprint_v2(data)
+        assert "服务端" in html  # module name present
+        assert "renderOverview" in html
+
+    def test_flows_have_colors(self) -> None:
+        """Multiple flows should have distinct color values in the output."""
+        from src.tools.blueprint_renderer_v2 import render_blueprint_v2
+
+        data = _make_report_data()
+        data["blueprint_summary"]["flows"] = [
+            {"name": "流程A", "description": "", "steps": ["A1", "A2"]},
+            {"name": "流程B", "description": "", "steps": ["B1", "B2"]},
+        ]
+        html = render_blueprint_v2(data)
+        assert "#6366f1" in html  # first flow color
+        assert "#10b981" in html  # second flow color
+
+    def test_flows_no_dblclick(self) -> None:
+        """Flow step nodes should not have dblclick handlers."""
+        from src.tools.blueprint_renderer_v2 import render_blueprint_v2
+
+        data = _make_report_data()
+        data["blueprint_summary"]["flows"] = [
+            {"name": "流程", "description": "", "steps": ["步骤1"]},
+        ]
+        html = render_blueprint_v2(data)
+        # The renderFlows function should not contain dblclick
+        # Extract the flows section — it should not bind dblclick
+        flows_js_start = html.find("window.renderFlows")
+        flows_js_end = html.find("window.renderOverview")
+        flows_js = html[flows_js_start:flows_js_end]
+        assert "dblclick" not in flows_js
+
+    def test_arrowhead_marker(self) -> None:
+        """Flow rendering JS should define an arrowhead marker."""
+        from src.tools.blueprint_renderer_v2 import render_blueprint_v2
+
+        data = _make_report_data()
+        data["blueprint_summary"]["flows"] = [
+            {"name": "流程", "description": "", "steps": ["A", "B"]},
+        ]
+        html = render_blueprint_v2(data)
+        assert "arrowhead" in html

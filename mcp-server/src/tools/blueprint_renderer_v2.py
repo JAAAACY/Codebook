@@ -10,7 +10,7 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from src.tools.canvas_layout import layout_module_detail, layout_overview
+from src.tools.canvas_layout import layout_flows, layout_module_detail, layout_overview
 
 # ── CSS (module-level constant) ──────────────────────────────
 
@@ -44,6 +44,11 @@ html, body { height: 100%; overflow: hidden; font-family: -apple-system, BlinkMa
 .detail-header { font-size: 12px; font-weight: 600; fill: #e0e2f0; }
 .detail-sub { font-size: 10px; fill: #6366f1; }
 .detail-body { font-size: 10px; fill: #8b8fa8; }
+.flow-name { font-size: 16px; font-weight: 700; }
+.flow-desc { font-size: 11px; fill: #5a5f78; }
+.flow-step { rx: 8; ry: 8; fill: #1a1d2b; stroke-width: 1.5; }
+.flow-step-text { font-size: 12px; fill: #e0e2f0; text-anchor: middle; dominant-baseline: central; }
+.flow-arrow { fill: none; stroke-width: 1.5; marker-end: url(#arrowhead); }
 """
 
 # ── JS engine (module-level constant) ────────────────────────
@@ -132,6 +137,104 @@ _JS = """\
     var cx = (x1 + x2) / 2;
     return 'M' + x1 + ',' + y1 + ' C' + cx + ',' + y1 + ' ' + cx + ',' + y2 + ' ' + x2 + ',' + y2;
   }
+
+  // ── Flows ──
+
+  window.renderFlows = function() {
+    currentView = 'flows';
+    scale = 1; panX = 0; panY = 0;
+    clearSVG();
+    updateBreadcrumb(null);
+
+    var flows = data.flows || [];
+    if (!flows.length) return;
+
+    // Add arrowhead marker
+    var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    var marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    marker.setAttribute('id', 'arrowhead');
+    marker.setAttribute('markerWidth', '8');
+    marker.setAttribute('markerHeight', '6');
+    marker.setAttribute('refX', '8');
+    marker.setAttribute('refY', '3');
+    marker.setAttribute('orient', 'auto');
+    var arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    arrow.setAttribute('d', 'M0,0 L8,3 L0,6');
+    arrow.setAttribute('fill', 'none');
+    arrow.setAttribute('stroke', '#5a5f78');
+    arrow.setAttribute('stroke-width', '1');
+    marker.appendChild(arrow);
+    defs.appendChild(marker);
+    root.appendChild(defs);
+
+    flows.forEach(function(fl) {
+      var nodeMap = {};
+      fl.nodes.forEach(function(n) { nodeMap[n.id] = n; });
+
+      // Flow name label (left of first node)
+      var firstNode = fl.nodes[0];
+      if (firstNode) {
+        var nameText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        nameText.setAttribute('x', firstNode.x);
+        nameText.setAttribute('y', firstNode.y - 28);
+        nameText.setAttribute('class', 'flow-name');
+        nameText.setAttribute('fill', fl.color);
+        nameText.textContent = fl.name;
+        root.appendChild(nameText);
+
+        if (fl.description) {
+          var descText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          descText.setAttribute('x', firstNode.x);
+          descText.setAttribute('y', firstNode.y - 12);
+          descText.setAttribute('class', 'flow-desc');
+          descText.textContent = fl.description;
+          root.appendChild(descText);
+        }
+      }
+
+      // Connections (arrows)
+      fl.connections.forEach(function(c) {
+        var fromN = nodeMap[c.from_id];
+        var toN = nodeMap[c.to_id];
+        if (!fromN || !toN) return;
+        var x1 = fromN.x + fromN.width;
+        var y1 = fromN.y + fromN.height / 2;
+        var x2 = toN.x;
+        var y2 = toN.y + toN.height / 2;
+        var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x1);
+        line.setAttribute('y1', y1);
+        line.setAttribute('x2', x2);
+        line.setAttribute('y2', y2);
+        line.setAttribute('class', 'flow-arrow');
+        line.setAttribute('stroke', fl.color);
+        root.appendChild(line);
+      });
+
+      // Step nodes
+      fl.nodes.forEach(function(n) {
+        var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+        var rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', n.x);
+        rect.setAttribute('y', n.y);
+        rect.setAttribute('width', n.width);
+        rect.setAttribute('height', n.height);
+        rect.setAttribute('class', 'flow-step');
+        rect.setAttribute('stroke', fl.color);
+        g.appendChild(rect);
+
+        var text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', n.x + n.width / 2);
+        text.setAttribute('y', n.y + n.height / 2);
+        text.setAttribute('class', 'flow-step-text');
+        text.textContent = n.text;
+        g.appendChild(text);
+
+        root.appendChild(g);
+      });
+    });
+  };
 
   // ── Overview ──
 
@@ -312,7 +415,11 @@ _JS = """\
   }
 
   window.showOverview = function() {
-    renderOverview();
+    if (data.flows && data.flows.length) {
+      renderFlows();
+    } else {
+      renderOverview();
+    }
   };
 
   // ── Chat toggle ──
@@ -323,8 +430,12 @@ _JS = """\
     chatToggle.classList.toggle('visible');
   };
 
-  // Init
-  renderOverview();
+  // Init — prefer flows view when data available
+  if (data.flows && data.flows.length) {
+    renderFlows();
+  } else {
+    renderOverview();
+  }
 })();
 """
 
@@ -379,6 +490,10 @@ def render_blueprint_v2(
         }
         for c in connections_raw
     ]
+
+    # ── Prepare flow lines (if available) ──
+    flows_raw: list[dict[str, Any]] = summary.get("flows", [])
+    flow_lines = layout_flows(flows_raw) if flows_raw else []
 
     if ov_modules:
         ov_nodes, ov_edges = layout_overview(ov_modules, ov_connections)
@@ -437,10 +552,21 @@ def render_blueprint_v2(
         }
 
     # ── Build JSON payload ──
+    flows_payload: list[dict[str, Any]] = []
+    for fl in flow_lines:
+        flows_payload.append({
+            "name": fl.name,
+            "description": fl.description,
+            "color": fl.color,
+            "nodes": [asdict(n) for n in fl.nodes],
+            "connections": [asdict(c) for c in fl.connections],
+        })
+
     blueprint_data = {
         "projectName": project_name,
         "repoUrl": repo_url,
         "totalTime": total_time,
+        "flows": flows_payload,
         "overview": {
             "nodes": [asdict(n) for n in ov_nodes],
             "edges": [asdict(e) for e in ov_edges],

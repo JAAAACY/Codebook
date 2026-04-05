@@ -238,3 +238,107 @@ class TestLayoutModuleDetail:
         assert nodes[3].y > nodes[0].y
         # Columns: fn_0.x < fn_1.x < fn_2.x
         assert nodes[0].x < nodes[1].x < nodes[2].x
+
+
+# ── Flow line layout tests ────────────────────────────────
+
+
+class TestLayoutFlows:
+    """Tests for layout_flows(flows)."""
+
+    def test_single_flow(self) -> None:
+        """A single flow with 3 steps should produce 3 nodes in one row."""
+        from src.tools.canvas_layout import layout_flows
+
+        flows = [
+            {
+                "name": "用户消息处理",
+                "description": "接收并处理用户输入",
+                "steps": ["接收消息", "理解意图", "执行返回"],
+            }
+        ]
+
+        result = layout_flows(flows)
+
+        assert len(result) == 1
+        fl = result[0]
+        assert fl.name == "用户消息处理"
+        assert len(fl.nodes) == 3
+        assert fl.nodes[0].text == "接收消息"
+        assert fl.nodes[1].text == "理解意图"
+        assert fl.nodes[2].text == "执行返回"
+        # All nodes same y (single row)
+        assert fl.nodes[0].y == fl.nodes[1].y == fl.nodes[2].y
+        # Nodes left-to-right
+        assert fl.nodes[0].x < fl.nodes[1].x < fl.nodes[2].x
+
+    def test_multiple_flows_vertical(self) -> None:
+        """Multiple flows should be arranged top-to-bottom with increasing y."""
+        from src.tools.canvas_layout import layout_flows
+
+        flows = [
+            {"name": "流程A", "description": "", "steps": ["步骤1"]},
+            {"name": "流程B", "description": "", "steps": ["步骤1"]},
+            {"name": "流程C", "description": "", "steps": ["步骤1"]},
+        ]
+
+        result = layout_flows(flows)
+
+        assert len(result) == 3
+        y_values = [fl.nodes[0].y for fl in result]
+        assert y_values[0] < y_values[1] < y_values[2]
+
+    def test_step_connections(self) -> None:
+        """Consecutive steps should be connected."""
+        from src.tools.canvas_layout import layout_flows
+
+        flows = [
+            {"name": "流程", "description": "", "steps": ["A", "B", "C", "D"]},
+        ]
+
+        result = layout_flows(flows)
+
+        fl = result[0]
+        assert len(fl.connections) == 3
+        assert fl.connections[0].from_id == "flow_0_step_0"
+        assert fl.connections[0].to_id == "flow_0_step_1"
+        assert fl.connections[1].from_id == "flow_0_step_1"
+        assert fl.connections[1].to_id == "flow_0_step_2"
+        assert fl.connections[2].from_id == "flow_0_step_2"
+        assert fl.connections[2].to_id == "flow_0_step_3"
+
+    def test_flow_colors(self) -> None:
+        """Different flows should have different colors; first is #6366f1."""
+        from src.tools.canvas_layout import layout_flows
+
+        flows = [
+            {"name": f"流程{i}", "description": "", "steps": ["步骤"]}
+            for i in range(5)
+        ]
+
+        result = layout_flows(flows)
+
+        assert result[0].color == "#6366f1"
+        assert result[1].color == "#10b981"
+        assert result[2].color == "#f59e0b"
+        assert result[3].color == "#3b82f6"
+        assert result[4].color == "#ef4444"
+        # All colors unique
+        colors = [fl.color for fl in result]
+        assert len(set(colors)) == 5
+
+    def test_empty_flows(self) -> None:
+        """Empty flows list should return empty result."""
+        from src.tools.canvas_layout import layout_flows
+
+        assert layout_flows([]) == []
+
+    def test_node_dimensions(self) -> None:
+        """Flow step nodes should have width 200 and height 50."""
+        from src.tools.canvas_layout import layout_flows
+
+        flows = [{"name": "流程", "description": "", "steps": ["步骤"]}]
+        result = layout_flows(flows)
+        node = result[0].nodes[0]
+        assert node.width == 200
+        assert node.height == 50

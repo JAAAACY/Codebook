@@ -281,6 +281,110 @@ def layout_overview(
     return result_nodes, result_edges
 
 
+# ── Flow line data classes ───────────────────────────────
+
+
+@dataclass(frozen=True)
+class FlowStepNode:
+    """流程步骤节点。"""
+
+    id: str  # "flow_0_step_2"
+    flow_index: int  # 所属流程线索引
+    step_index: int  # 步骤索引
+    text: str  # 业务描述（纯中文）
+    x: float
+    y: float
+    width: int = 200
+    height: int = 50
+
+
+@dataclass(frozen=True)
+class FlowConnection:
+    """步骤间连接。"""
+
+    from_id: str
+    to_id: str
+
+
+@dataclass(frozen=True)
+class FlowLine:
+    """一条完整的流程线。"""
+
+    name: str  # 流程名
+    description: str  # 一句话描述
+    color: str  # 流程线颜色
+    nodes: list[FlowStepNode]
+    connections: list[FlowConnection]
+
+
+# ── Flow line constants ──────────────────────────────────
+
+_FL_NODE_W = 200
+_FL_NODE_H = 50
+_FL_H_GAP = 40
+_FL_V_GAP = 100
+_FL_MARGIN = 80
+_FL_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#3b82f6", "#ef4444"]
+
+
+# ── Flow line layout ─────────────────────────────────────
+
+
+def layout_flows(flows: list[dict[str, Any]]) -> list[FlowLine]:
+    """布局业务流程线：每条流程一行，步骤从左到右排列。
+
+    Args:
+        flows: list of {"name": str, "description": str, "steps": list[str]}
+
+    Returns:
+        List of FlowLine dataclasses with computed coordinates.
+    """
+    result: list[FlowLine] = []
+
+    for flow_idx, flow in enumerate(flows):
+        color = _FL_COLORS[flow_idx % len(_FL_COLORS)]
+        steps: list[str] = flow.get("steps", [])
+        name = flow.get("name", "")
+        description = flow.get("description", "")
+
+        y = _FL_MARGIN + flow_idx * (_FL_NODE_H + _FL_V_GAP)
+
+        nodes: list[FlowStepNode] = []
+        connections: list[FlowConnection] = []
+
+        for step_idx, step_text in enumerate(steps):
+            x = _FL_MARGIN + step_idx * (_FL_NODE_W + _FL_H_GAP)
+            node_id = f"flow_{flow_idx}_step_{step_idx}"
+            nodes.append(
+                FlowStepNode(
+                    id=node_id,
+                    flow_index=flow_idx,
+                    step_index=step_idx,
+                    text=step_text,
+                    x=x,
+                    y=y,
+                )
+            )
+
+        # Connect consecutive steps
+        for i in range(len(nodes) - 1):
+            connections.append(
+                FlowConnection(from_id=nodes[i].id, to_id=nodes[i + 1].id)
+            )
+
+        result.append(
+            FlowLine(
+                name=name,
+                description=description,
+                color=color,
+                nodes=nodes,
+                connections=connections,
+            )
+        )
+
+    return result
+
+
 # ── Module detail layout (grid) ──────────────────────────
 
 
